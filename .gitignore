@@ -1,0 +1,15 @@
+node_modules
+dist
+.DS_Store
+*.log
+.vite
+coverage
+demo/public/libav
+
+# Vendored libav.js binaries — large, built locally via scripts/build-libav.sh
+# Uncomment the next line to track them in git (e.g. for CI without Emscripten)
+# !vendor/libav/*.wasm
+vendor/libav/*.wasm
+vendor/libav/*.js
+vendor/libav/*.mjs
+!vendor/libav/README.md

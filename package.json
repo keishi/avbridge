@@ -1,0 +1,72 @@
+{
+  "name": "ubmp",
+  "version": "0.1.0",
+  "description": "Universal Browser Media Player — play any local media file in the browser via native, remux, or WASM-decode strategies.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/keishi/ubmp.git"
+  },
+  "bugs": {
+    "url": "https://github.com/keishi/ubmp/issues"
+  },
+  "keywords": [
+    "media-player",
+    "video",
+    "audio",
+    "browser",
+    "webcodecs",
+    "mse",
+    "avi",
+    "mkv",
+    "wmv",
+    "divx",
+    "libav",
+    "wasm"
+  ],
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    }
+  },
+  "files": [
+    "dist",
+    "src",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "predemo": "node scripts/copy-libav.mjs",
+    "demo": "vite",
+    "predemo:build": "node scripts/copy-libav.mjs",
+    "demo:build": "vite build",
+    "build:libav": "./scripts/build-libav.sh",
+    "test:playback": "node scripts/playback-test.mjs"
+  },
+  "dependencies": {
+    "mediabunny": "^1.40.1"
+  },
+  "optionalDependencies": {
+    "@libav.js/types": "^6.8.8",
+    "@libav.js/variant-webcodecs": "^6.8.8",
+    "libavjs-webcodecs-bridge": "^0.3.2"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "jsdom": "^24.0.0",
+    "puppeteer": "^24.40.0",
+    "tsup": "^8.0.0",
+    "typescript": "^5.4.0",
+    "vite": "^5.2.0",
+    "vitest": "^1.5.0"
+  }
+}
