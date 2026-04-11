@@ -58,7 +58,7 @@ export async function attachSubtitleTracks(
   tracks: SubtitleTrackInfo[],
 ): Promise<void> {
   // Clear existing dynamically-attached tracks.
-  for (const t of Array.from(video.querySelectorAll("track[data-ubmp]"))) {
+  for (const t of Array.from(video.querySelectorAll("track[data-avbridge]"))) {
     t.remove();
   }
 
@@ -77,7 +77,7 @@ export async function attachSubtitleTracks(
       const text = await res.text();
       if (!isVtt(text)) {
         // eslint-disable-next-line no-console
-        console.warn("[ubmp] subtitle missing WEBVTT header:", t.sidecarUrl);
+        console.warn("[avbridge] subtitle missing WEBVTT header:", t.sidecarUrl);
       }
     }
     const track = document.createElement("track");
@@ -85,7 +85,7 @@ export async function attachSubtitleTracks(
     track.src = url;
     track.srclang = t.language ?? "und";
     track.label = t.language ?? `Subtitle ${t.id}`;
-    track.dataset.ubmp = "true";
+    track.dataset.avbridge = "true";
     video.appendChild(track);
   }
 }

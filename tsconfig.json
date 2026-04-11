@@ -22,11 +22,11 @@
     "rootDir": ".",
     "types": ["node"],
     "paths": {
-      "ubmp": ["./src/index.ts"],
+      "avbridge": ["./src/index.ts"],
       "@libav.js/variant-webcodecs": ["./src/libav-stubs.d.ts"],
       "libavjs-webcodecs-bridge": ["./src/libav-stubs.d.ts"]
     }
   },
   "include": ["src", "tests", "demo", "tsup.config.ts", "vite.config.ts", "vitest.config.ts"],
-  "exclude": ["dist", "node_modules"]
+  "exclude": ["dist", "node_modules", "tests/fixtures"]
 }

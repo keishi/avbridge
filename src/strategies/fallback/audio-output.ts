@@ -50,6 +50,20 @@ export class AudioOutput implements ClockSource {
 
   private state: "idle" | "playing" | "paused" = "idle";
 
+  /**
+   * Wall-clock fallback mode. When true, this output behaves as if audio
+   * is unavailable — `now()` advances from `performance.now()` instead of
+   * the audio context, `schedule()` is a no-op, and `bufferAhead()` returns
+   * Infinity so the session's `waitForBuffer()` doesn't block on audio.
+   *
+   * Set by the decoder via {@link setNoAudio} when audio decode init fails.
+   * This is what lets video play even when the audio codec isn't supported
+   * by the loaded libav variant.
+   */
+  private noAudio = false;
+  /** Wall-clock anchor (ms from `performance.now()`) for noAudio mode. */
+  private wallAnchorMs = 0;
+
   /** Media time at which the next sample will be scheduled. */
   private mediaTimeOfNext = 0;
 
@@ -68,9 +82,25 @@ export class AudioOutput implements ClockSource {
     this.gain.connect(this.ctx.destination);
   }
 
+  /**
+   * Switch into wall-clock fallback mode. Called by the decoder when no
+   * audio decoder could be initialized for the source. Once set, this
+   * output drives playback time from `performance.now()` and ignores
+   * any incoming audio samples.
+   */
+  setNoAudio(): void {
+    this.noAudio = true;
+  }
+
   // ── ClockSource ────────────────────────────────────────────────────────
 
   now(): number {
+    if (this.noAudio) {
+      if (this.state === "playing") {
+        return this.mediaTimeOfAnchor + (performance.now() - this.wallAnchorMs) / 1000;
+      }
+      return this.mediaTimeOfAnchor;
+    }
     if (this.state === "playing") {
       return this.mediaTimeOfAnchor + (this.ctx.currentTime - this.ctxTimeAtAnchor);
     }
@@ -89,6 +119,10 @@ export class AudioOutput implements ClockSource {
    * it counts how far `mediaTimeOfNext` is ahead of `now()`.
    */
   bufferAhead(): number {
+    // In wall-clock mode, no samples are ever scheduled — the buffer is
+    // genuinely empty. Callers that want to gate cold-start should check
+    // {@link isNoAudio} and skip the audio gate entirely instead.
+    if (this.noAudio) return 0;
     if (this.state === "idle") {
       let sec = 0;
       for (const c of this.pendingQueue) sec += c.durationSec;
@@ -97,12 +131,18 @@ export class AudioOutput implements ClockSource {
     return Math.max(0, this.mediaTimeOfNext - this.now());
   }
 
+  /** True if this output is in wall-clock fallback mode (no audio decode). */
+  isNoAudio(): boolean {
+    return this.noAudio;
+  }
+
   /**
    * Schedule a chunk of decoded samples. Queues internally while idle (cold
    * start or post-seek), schedules directly to the audio graph while playing.
+   * In wall-clock mode, samples are silently discarded.
    */
   schedule(samples: Float32Array, channels: number, sampleRate: number): void {
-    if (this.destroyed) return;
+    if (this.destroyed || this.noAudio) return;
     const frameCount = samples.length / channels;
     const durationSec = frameCount / sampleRate;
 
@@ -151,6 +191,15 @@ export class AudioOutput implements ClockSource {
   async start(): Promise<void> {
     if (this.destroyed || this.state === "playing") return;
 
+    // Wall-clock mode: no audio context involved. Anchor to performance.now()
+    // and let `now()` advance from there. The renderer's tick loop will see
+    // `isPlaying() === true` and start painting frames.
+    if (this.noAudio) {
+      this.wallAnchorMs = performance.now();
+      this.state = "playing";
+      return;
+    }
+
     if (this.ctx.state === "suspended") {
       await this.ctx.resume();
     }
@@ -190,6 +239,7 @@ export class AudioOutput implements ClockSource {
     if (this.state !== "playing") return;
     this.mediaTimeOfAnchor = this.now();
     this.state = "paused";
+    if (this.noAudio) return;
     if (this.ctx.state === "running") {
       await this.ctx.suspend();
     }
@@ -204,6 +254,14 @@ export class AudioOutput implements ClockSource {
    * supplying new samples) and then call `start()` to resume playback.
    */
   async reset(newMediaTime: number): Promise<void> {
+    if (this.noAudio) {
+      this.pendingQueue = [];
+      this.mediaTimeOfAnchor = newMediaTime;
+      this.wallAnchorMs = performance.now();
+      this.state = "idle";
+      return;
+    }
+
     try { this.gain.disconnect(); } catch { /* ignore */ }
     this.gain = this.ctx.createGain();
     this.gain.connect(this.ctx.destination);
@@ -224,6 +282,7 @@ export class AudioOutput implements ClockSource {
       framesScheduled: this.framesScheduled,
       bufferAhead: this.bufferAhead(),
       audioState: this.state,
+      clockMode: this.noAudio ? "wall" : "audio",
     };
   }
 

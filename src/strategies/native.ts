@@ -69,6 +69,9 @@ export async function createNativeSession(
       video.load();
       revoke?.();
     },
+    getCurrentTime() {
+      return video.currentTime || 0;
+    },
     getRuntimeStats() {
       // getVideoPlaybackQuality is the standard hook; not all UAs implement it.
       const q = (video as unknown as { getVideoPlaybackQuality?: () => VideoPlaybackQuality }).getVideoPlaybackQuality?.();

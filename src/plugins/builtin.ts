@@ -1,6 +1,7 @@
 import type { Plugin } from "../types.js";
 import { createNativeSession } from "../strategies/native.js";
 import { createRemuxSession } from "../strategies/remux/index.js";
+import { createHybridSession } from "../strategies/hybrid/index.js";
 import { createFallbackSession } from "../strategies/fallback/index.js";
 import type { PluginRegistry } from "./registry.js";
 
@@ -16,6 +17,12 @@ const remuxPlugin: Plugin = {
   execute: (ctx, video) => createRemuxSession(ctx, video),
 };
 
+const hybridPlugin: Plugin = {
+  name: "hybrid",
+  canHandle: () => typeof VideoDecoder !== "undefined",
+  execute: (ctx, video) => createHybridSession(ctx, video),
+};
+
 const fallbackPlugin: Plugin = {
   name: "fallback",
   canHandle: () => true,
@@ -25,5 +32,6 @@ const fallbackPlugin: Plugin = {
 export function registerBuiltins(registry: PluginRegistry): void {
   registry.register(nativePlugin);
   registry.register(remuxPlugin);
+  registry.register(hybridPlugin);
   registry.register(fallbackPlugin);
 }

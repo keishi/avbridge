@@ -37,9 +37,10 @@ export async function createFallbackSession(
   ctx: MediaContext,
   target: HTMLVideoElement,
 ): Promise<PlaybackSession> {
-  if (!(ctx.source instanceof Blob)) {
-    throw new Error("fallback strategy: source must be a Blob/File (URL sources are buffered earlier)");
-  }
+  // Normalize the source so URL inputs go through the libav HTTP block
+  // reader instead of being buffered into memory.
+  const { normalizeSource } = await import("../../util/source.js");
+  const source = await normalizeSource(ctx.source);
 
   const fps = ctx.videoTracks[0]?.fps ?? 30;
   const audio = new AudioOutput();
@@ -48,7 +49,7 @@ export async function createFallbackSession(
   let handles: DecoderHandles;
   try {
     handles = await startDecoder({
-      blob: ctx.source,
+      source,
       filename: ctx.name ?? "input.bin",
       context: ctx,
       renderer,
@@ -89,10 +90,8 @@ export async function createFallbackSession(
   async function waitForBuffer(): Promise<void> {
     const start = performance.now();
     while (true) {
-      if (
-        audio.bufferAhead() >= READY_AUDIO_BUFFER_SECONDS &&
-        renderer.hasFrames()
-      ) {
+      const audioReady = audio.isNoAudio() || audio.bufferAhead() >= READY_AUDIO_BUFFER_SECONDS;
+      if (audioReady && renderer.hasFrames()) {
         return;
       }
       if ((performance.now() - start) / 1000 > READY_TIMEOUT_SECONDS) {
@@ -109,7 +108,7 @@ export async function createFallbackSession(
     await audio.pause().catch(() => {});
     // 2. Tell the decoder to cancel its pump and seek the demuxer.
     await handles.seek(timeSec).catch((err) =>
-      console.warn("[ubmp] decoder seek failed:", err),
+      console.warn("[avbridge] decoder seek failed:", err),
     );
     // 3. Reset audio + renderer to the new media time. New samples from
     //    the decoder will queue against this anchor.
@@ -151,6 +150,9 @@ export async function createFallbackSession(
       // Subtitle overlay support is post-MVP for the fallback strategy.
     },
 
+    getCurrentTime() {
+      return audio.now();
+    },
     async destroy() {
       await handles.destroy();
       renderer.destroy();

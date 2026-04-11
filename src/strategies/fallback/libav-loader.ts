@@ -1,7 +1,7 @@
 /**
  * Lazy libav.js loader supporting multiple variants.
  *
- * UBMP recognises three libav variants:
+ * avbridge recognises three libav variants:
  *
  * - **webcodecs** — npm `@libav.js/variant-webcodecs`, ~5 MB. Modern formats
  *   only (mp4/mkv/webm/ogg/wav/...) — designed to bridge to WebCodecs.
@@ -9,7 +9,7 @@
  * - **default** — npm `@libav.js/variant-default`, ~12 MB. Audio-only build
  *   (Opus, FLAC, WAV) despite the name. Useful for audio fallback.
  *
- * - **ubmp** — a custom build produced by `scripts/build-libav.sh` and
+ * - **avbridge** — a custom build produced by `scripts/build-libav.sh` and
  *   landing in `vendor/libav/`. Includes the AVI/ASF/FLV/MKV demuxers plus
  *   the legacy decoders (WMV3, MPEG-4 Part 2, MS-MPEG4 v1/2/3, VC-1, MPEG-1/2,
  *   AC-3/E-AC-3, WMAv1/v2/Pro). This is the only variant that can read AVI;
@@ -22,7 +22,7 @@
  * breaks libav's sibling-binary loading.
  */
 
-export type LibavVariant = "webcodecs" | "default" | "ubmp";
+export type LibavVariant = "webcodecs" | "default" | "avbridge";
 
 export interface LoadLibavOptions {
   /**
@@ -45,7 +45,7 @@ function cacheKey(variant: LibavVariant, threads: boolean): string {
 
 /**
  * Load (and cache) a libav.js variant. Pass `"webcodecs"` for the small
- * default; pass `"default"` for the audio fallback; pass `"ubmp"` for the
+ * default; pass `"default"` for the audio fallback; pass `"avbridge"` for the
  * custom build that supports AVI/WMV/legacy codecs.
  */
 export function loadLibav(
@@ -65,13 +65,13 @@ export function loadLibav(
   // Performance work for the fallback strategy needs to come from elsewhere
   // (WASM SIMD, OffscreenCanvas, larger decode batches) instead of libav's
   // pthreads. Threading can still be force-enabled with
-  // `globalThis.UBMP_LIBAV_THREADS = true` for testing if libav.js fixes
+  // `globalThis.AVBRIDGE_LIBAV_THREADS = true` for testing if libav.js fixes
   // those bugs in a future release.
-  const env = globalThis as { UBMP_LIBAV_THREADS?: boolean };
+  const env = globalThis as { AVBRIDGE_LIBAV_THREADS?: boolean };
   const wantThreads =
     opts.threads !== undefined
       ? opts.threads
-      : env.UBMP_LIBAV_THREADS === true;
+      : env.AVBRIDGE_LIBAV_THREADS === true;
 
   const key = cacheKey(variant, wantThreads);
   let entry = cache.get(key);
@@ -88,7 +88,7 @@ async function loadVariant(
 ): Promise<LibavInstance> {
   const key = cacheKey(variant, wantThreads);
   const base = `${libavBaseUrl()}/${variant}`;
-  // The custom variant is named `libav-ubmp.mjs`; the npm variants follow
+  // The custom variant is named `libav-avbridge.mjs`; the npm variants follow
   // the same convention (`libav-webcodecs.mjs`, `libav-default.mjs`).
   const variantUrl = `${base}/libav-${variant}.mjs`;
 
@@ -103,8 +103,8 @@ async function loadVariant(
   } catch (err) {
     cache.delete(key);
     const hint =
-      variant === "ubmp"
-        ? `The "ubmp" variant is a custom local build. Run \`./scripts/build-libav.sh\` ` +
+      variant === "avbridge"
+        ? `The "avbridge" variant is a custom local build. Run \`./scripts/build-libav.sh\` ` +
           `to produce it (requires Emscripten; ~15-30 min the first time), then ` +
           `\`npm run predemo\` to copy it into the demo asset path.`
         : `Make sure the variant files are present (run \`npm run predemo\` or copy ` +
@@ -163,7 +163,7 @@ function buildOpts(base: string, wantThreads: boolean): Record<string, unknown> 
 function libavBaseUrl(): string {
   const override =
     typeof globalThis !== "undefined"
-      ? (globalThis as { UBMP_LIBAV_BASE?: string }).UBMP_LIBAV_BASE
+      ? (globalThis as { AVBRIDGE_LIBAV_BASE?: string }).AVBRIDGE_LIBAV_BASE
       : undefined;
   if (override) return override;
   if (typeof location !== "undefined" && location.protocol.startsWith("http")) {
@@ -175,7 +175,7 @@ function libavBaseUrl(): string {
 function chain(message: string, err: unknown): Error {
   const inner = err instanceof Error ? err.message : String(err);
   // eslint-disable-next-line no-console
-  console.error(`[ubmp] ${message}:`, err);
+  console.error(`[avbridge] ${message}:`, err);
   return new Error(`${message}: ${inner || "(no message — see browser console)"}`);
 }
 

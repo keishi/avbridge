@@ -186,7 +186,7 @@ export class VideoRenderer {
       // the console at 60 Hz, but we still find out about it.
       if (this.framesPainted === 0 && this.framesDroppedLate === 0) {
         // eslint-disable-next-line no-console
-        console.warn("[ubmp] canvas drawImage failed:", err);
+        console.warn("[avbridge] canvas drawImage failed:", err);
       }
     }
   }

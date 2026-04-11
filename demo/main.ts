@@ -1,12 +1,17 @@
-// During dev, the demo imports from the source tree directly. The vite alias
-// in `vite.config.ts` rewrites bare `ubmp` imports to the same path; we use
-// the relative form here so the TS type-checker (which doesn't read vite
-// config) is happy.
-import { createPlayer, type UnifiedPlayer } from "../src/index.js";
+// Player demo — uses the <avbridge-player> reference component instead of
+// wiring createPlayer() directly. The component owns the lifecycle, so this
+// file is mostly UI glue.
+//
+// We also import { srtToVtt } via the core entry to demonstrate that the
+// core and the element entry coexist cleanly.
+
+import "../src/element.js";
+import type { AvbridgePlayerElement } from "../src/element/avbridge-player.js";
+import type { StrategyName } from "../src/index.js";
 
 const fileInput = document.getElementById("file") as HTMLInputElement;
 const subInput = document.getElementById("subs") as HTMLInputElement;
-const video = document.getElementById("video") as HTMLVideoElement;
+const player = document.getElementById("player") as AvbridgePlayerElement;
 const badge = document.getElementById("badge")!;
 const diag = document.getElementById("diagnostics")!;
 const errorEl = document.getElementById("error")!;
@@ -14,11 +19,10 @@ const errorEl = document.getElementById("error")!;
 const playPauseBtn = document.getElementById("playPause") as HTMLButtonElement;
 const seekBar = document.getElementById("seek") as HTMLInputElement;
 const timeLabel = document.getElementById("time")!;
+const strategySwitcher = document.getElementById("strategy-switcher")!;
+const stratBtns = document.querySelectorAll<HTMLButtonElement>(".strat-btn");
 
-let current: UnifiedPlayer | null = null;
 let pendingSub: { url: string; format: "srt" | "vtt" } | null = null;
-
-// State the controls need to know about.
 let isPlaying = false;
 let duration = 0;
 let userIsScrubbing = false;
@@ -38,10 +42,6 @@ function formatTime(sec: number): string {
 function setPlayingUI(playing: boolean) {
   isPlaying = playing;
   playPauseBtn.textContent = playing ? "⏸" : "▶";
-  // Restore the strategy badge text/colour. setBufferingUI() temporarily
-  // overwrites both, so we have to reset them once playback is actually
-  // running (or paused) — otherwise the badge stays stuck on
-  // "fallback · buffering…".
   if (strategy) {
     badge.textContent = strategy;
     badge.className = `badge ${strategy}`;
@@ -57,11 +57,59 @@ function setStrategyUI(s: string) {
   strategy = s;
   badge.textContent = s;
   badge.className = `badge ${s}`;
+  stratBtns.forEach((btn) => {
+    btn.classList.toggle("active", btn.dataset.strategy === s);
+  });
 }
 
 function updateTimeLabel(currentTime: number) {
   timeLabel.textContent = `${formatTime(currentTime)} / ${formatTime(duration)}`;
 }
+
+// ── Element event wiring ─────────────────────────────────────────────────
+
+player.addEventListener("strategychange", (e) => {
+  const detail = (e as CustomEvent).detail;
+  setStrategyUI(detail.strategy);
+  console.log("[demo] strategychange:", detail.strategy, "—", detail.reason);
+});
+
+player.addEventListener("trackschange", (e) => {
+  console.log("[demo] trackschange:", (e as CustomEvent).detail);
+});
+
+player.addEventListener("error", (e) => {
+  const detail = (e as unknown as CustomEvent).detail;
+  errorEl.textContent = detail.error?.message ?? String(detail.error);
+});
+
+player.addEventListener("ready", () => {
+  duration = player.duration;
+  if (Number.isFinite(duration) && duration > 0) {
+    seekBar.max = String(duration);
+    seekBar.disabled = false;
+  }
+  playPauseBtn.disabled = false;
+  strategySwitcher.style.display = "";
+  diag.textContent = JSON.stringify(player.getDiagnostics(), null, 2);
+  updateTimeLabel(0);
+});
+
+player.addEventListener("timeupdate", (e) => {
+  if (userIsScrubbing) return;
+  const t = (e as CustomEvent).detail.currentTime;
+  seekBar.value = String(t);
+  updateTimeLabel(t);
+});
+
+player.addEventListener("ended", () => {
+  setPlayingUI(false);
+});
+
+setInterval(() => {
+  const d = player.getDiagnostics();
+  if (d) diag.textContent = JSON.stringify(d, null, 2);
+}, 1000);
 
 // ── File picker ──────────────────────────────────────────────────────────
 
@@ -82,12 +130,7 @@ fileInput.addEventListener("change", async () => {
   const file = fileInput.files?.[0];
   if (!file) return;
 
-  if (current) {
-    await current.destroy();
-    current = null;
-  }
-
-  // Reset controls UI
+  // Reset UI for the new source.
   playPauseBtn.disabled = true;
   seekBar.disabled = true;
   seekBar.value = "0";
@@ -95,79 +138,47 @@ fileInput.addEventListener("change", async () => {
   duration = 0;
   setPlayingUI(false);
   updateTimeLabel(0);
-
+  strategySwitcher.style.display = "none";
   badge.textContent = "loading…";
   badge.className = "badge";
 
   try {
-    current = await createPlayer({
-      source: file,
-      target: video,
-      subtitles: pendingSub ? [pendingSub] : undefined,
-    });
-
-    current.on("strategy", ({ strategy: s, reason }) => {
-      setStrategyUI(s);
-      console.log("[ubmp] strategy:", s, "—", reason);
-    });
-
-    current.on("error", (err) => {
-      errorEl.textContent = err.message;
-    });
-
-    current.on("ready", () => {
-      duration = current!.getDuration();
-      if (Number.isFinite(duration) && duration > 0) {
-        seekBar.max = String(duration);
-        seekBar.disabled = false;
-      }
-      playPauseBtn.disabled = false;
-      diag.textContent = JSON.stringify(current!.getDiagnostics(), null, 2);
-      updateTimeLabel(0);
-    });
-
-    current.on("timeupdate", ({ currentTime }) => {
-      if (!userIsScrubbing) {
-        seekBar.value = String(currentTime);
-        updateTimeLabel(currentTime);
-      }
-    });
-
-    current.on("ended", () => {
-      setPlayingUI(false);
-    });
-
-    setInterval(() => {
-      if (current) diag.textContent = JSON.stringify(current.getDiagnostics(), null, 2);
-    }, 1000);
-
-    // Auto-play. The file picker change event counts as a user gesture, so
-    // browsers will allow audio.
+    // Setting `source` triggers a fresh bootstrap inside the element.
+    // The element's lifecycle handles teardown of any previous player.
+    player.source = file;
     setBufferingUI();
-    await current.play();
+    await player.play();
     setPlayingUI(true);
+    if (pendingSub) {
+      // Subtitle support via the element is post-Phase-A. For now, escape
+      // hatch through the underlying player.
+      // TODO(phase-b): el.addTextTrack(...)
+      const p = player.player;
+      if (p) {
+        // Attach as native <track> element via the underlying <video> in
+        // the shadow root for the demo's purposes.
+        console.log("[demo] subtitle handoff is post-Phase-A; ignoring", pendingSub);
+      }
+    }
   } catch (err) {
     errorEl.textContent = (err as Error).message;
     badge.textContent = "error";
     badge.className = "badge";
-    const partial = (err as Error & { player?: UnifiedPlayer }).player;
-    if (partial) {
-      diag.textContent = JSON.stringify(partial.getDiagnostics(), null, 2);
-    }
+    const d = player.getDiagnostics();
+    if (d) diag.textContent = JSON.stringify(d, null, 2);
   }
 });
 
 // ── Custom controls ──────────────────────────────────────────────────────
 
 playPauseBtn.addEventListener("click", async () => {
-  if (!current) return;
   try {
     if (isPlaying) {
-      current.pause();
+      player.pause();
       setPlayingUI(false);
     } else {
       setBufferingUI();
-      await current.play();
+      await player.play();
       setPlayingUI(true);
     }
   } catch (err) {
@@ -175,20 +186,17 @@ playPauseBtn.addEventListener("click", async () => {
   }
 });
 
-// Track when the user is actively scrubbing so timeupdate events don't
-// fight the slider position.
 seekBar.addEventListener("pointerdown", () => { userIsScrubbing = true; });
-seekBar.addEventListener("pointerup",   () => { userIsScrubbing = false; });
+seekBar.addEventListener("pointerup", () => { userIsScrubbing = false; });
 seekBar.addEventListener("input", () => {
-  // Live preview of the time label as the user drags.
   updateTimeLabel(parseFloat(seekBar.value));
 });
 seekBar.addEventListener("change", async () => {
-  if (!current) return;
   const t = parseFloat(seekBar.value);
   try {
     setBufferingUI();
-    await current.seek(t);
+    // Assigning currentTime on the element seeks the underlying player.
+    player.currentTime = t;
     if (isPlaying) setPlayingUI(true);
     else setStrategyUI(strategy);
     updateTimeLabel(t);
@@ -199,10 +207,31 @@ seekBar.addEventListener("change", async () => {
   }
 });
 
-// Spacebar toggles play/pause when the page (not an input) has focus.
 window.addEventListener("keydown", (e) => {
   if (e.code === "Space" && document.activeElement?.tagName !== "INPUT") {
     e.preventDefault();
     playPauseBtn.click();
   }
+});
+
+// ── Strategy switcher (escape hatch via el.player) ───────────────────────
+
+stratBtns.forEach((btn) => {
+  btn.addEventListener("click", async () => {
+    const target = btn.dataset.strategy as StrategyName;
+    if (target === strategy) return;
+    // The component intentionally doesn't expose setStrategy() at the top
+    // level — strategy switching is a power-user concern. We use the
+    // documented escape hatch: el.player gives full access to the
+    // underlying UnifiedPlayer.
+    const p = player.player;
+    if (!p) return;
+    try {
+      setBufferingUI();
+      await p.setStrategy(target);
+      setPlayingUI(isPlaying);
+    } catch (err) {
+      errorEl.textContent = (err as Error).message;
+    }
+  });
 });

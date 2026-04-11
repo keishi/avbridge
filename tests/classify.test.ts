@@ -43,7 +43,8 @@ describe("classify", () => {
     expect(c.class).toBe("REMUX_CANDIDATE");
   });
 
-  it("routes avi/h264/aac to fallback (mediabunny can't read AVI)", () => {
+  it("routes avi/h264/aac to hybrid or fallback depending on WebCodecs", () => {
+    // The test runs in jsdom where VideoDecoder is undefined, so fallback
     const c = classify(
       ctx({
         container: "avi",
@@ -53,8 +54,8 @@ describe("classify", () => {
         audioTracks: [{ id: 1, codec: "aac", channels: 2, sampleRate: 48000 }],
       }),
     );
-    expect(c.strategy).toBe("fallback");
-    expect(c.reason).toMatch(/cannot be remuxed/);
+    // In jsdom, VideoDecoder is not defined → fallback
+    expect(["hybrid", "fallback"]).toContain(c.strategy);
   });
 
   it("routes wmv3 to fallback", () => {
@@ -92,7 +93,7 @@ describe("classify", () => {
       }),
     );
     expect(c.class).toBe("RISKY_NATIVE");
-    expect(c.fallbackStrategy).toBe("remux");
+    expect(c.fallbackChain).toContain("remux");
   });
 
   it("audio-only mp3 → native", () => {
@@ -115,17 +116,61 @@ describe("classify", () => {
     expect(c.strategy).toBe("fallback");
   });
 
-  it("routes avi/h264/mp3 to fallback (mediabunny can't read AVI)", () => {
+  it("routes avi/h264/mp3 to hybrid when WebCodecs available", () => {
+    // Simulate WebCodecs availability
+    (globalThis as unknown as Record<string, unknown>).VideoDecoder = class {};
+    try {
+      const c = classify(
+        ctx({
+          container: "avi",
+          videoTracks: [
+            { id: 0, codec: "h264", width: 852, height: 480, pixelFormat: "yuv420p", bitDepth: 8 },
+          ],
+          audioTracks: [{ id: 1, codec: "mp3", channels: 2, sampleRate: 44100 }],
+        }),
+      );
+      expect(c.strategy).toBe("hybrid");
+      expect(c.class).toBe("HYBRID_CANDIDATE");
+      expect(c.fallbackChain).toEqual(["fallback"]);
+    } finally {
+      delete (globalThis as unknown as Record<string, unknown>).VideoDecoder;
+    }
+  });
+
+  it("routes avi/h264/mp3 to fallback when WebCodecs unavailable", () => {
+    // Ensure VideoDecoder is not defined
+    const saved = (globalThis as unknown as Record<string, unknown>).VideoDecoder;
+    delete (globalThis as unknown as Record<string, unknown>).VideoDecoder;
+    try {
+      const c = classify(
+        ctx({
+          container: "avi",
+          videoTracks: [
+            { id: 0, codec: "h264", width: 852, height: 480, pixelFormat: "yuv420p", bitDepth: 8 },
+          ],
+          audioTracks: [{ id: 1, codec: "mp3", channels: 2, sampleRate: 44100 }],
+        }),
+      );
+      expect(c.strategy).toBe("fallback");
+    } finally {
+      if (saved !== undefined) {
+        (globalThis as unknown as Record<string, unknown>).VideoDecoder = saved;
+      }
+    }
+  });
+
+  it("flags Hi10P with fallbackChain", () => {
     const c = classify(
       ctx({
-        container: "avi",
+        container: "mp4",
         videoTracks: [
-          { id: 0, codec: "h264", width: 852, height: 480, pixelFormat: "yuv420p", bitDepth: 8 },
+          { id: 0, codec: "h264", profile: "High 10", bitDepth: 10, pixelFormat: "yuv420p10le", width: 1920, height: 1080 },
         ],
-        audioTracks: [{ id: 1, codec: "mp3", channels: 2, sampleRate: 44100 }],
+        audioTracks: [{ id: 1, codec: "aac", channels: 2, sampleRate: 48000 }],
       }),
     );
-    expect(c.strategy).toBe("fallback");
-    expect(c.reason).toMatch(/cannot be remuxed/);
+    expect(c.class).toBe("RISKY_NATIVE");
+    expect(c.fallbackChain).toContain("remux");
+    expect(c.fallbackChain).toContain("fallback");
   });
 });

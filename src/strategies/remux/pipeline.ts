@@ -1,35 +1,29 @@
 import type { MediaContext } from "../../types.js";
 import { MseSink } from "./mse.js";
-import { ubmpVideoToMediabunny, ubmpAudioToMediabunny } from "../../probe/mediabunny.js";
+import {
+  avbridgeVideoToMediabunny,
+  avbridgeAudioToMediabunny,
+  buildMediabunnySourceFromInput,
+} from "../../probe/mediabunny.js";
 
 /**
  * Remux pipeline built against mediabunny's real API.
  *
- * Key facts that drive the design:
+ * Key design notes:
  *
- * - `Input.getTracks()` returns typed `InputTrack` instances. Use the
- *   `isVideoTrack()` / `isAudioTrack()` type guards rather than treating
- *   tracks as plain objects.
- * - `EncodedVideoPacketSource(codec)` and `EncodedAudioPacketSource(codec)`
- *   take the codec as a **positional** argument, and the codec must be one of
- *   mediabunny's enum strings (`"avc" | "hevc" | "vp9" | "vp8" | "av1"` for
- *   video; `"aac" | "mp3" | "opus" | …` for audio). Passing anything else —
- *   including an object — fails with `Invalid video codec '[object Object]'`.
- * - `EncodedPacketSink(track)` is the way to pull packets; it exposes a
- *   `packets()` async iterator and `getKeyPacket(time)` for seeks.
- * - Each call to `source.add(packet, meta?)` may include a `meta` object on
- *   the first packet that contains the WebCodecs decoder config. We get that
- *   from `track.getDecoderConfig()`.
- * - For streaming output to MSE we need both the init segment (`ftyp`+`moov`)
- *   and the media fragments (`moof`+`mdat`). `BufferTarget` only stores the
- *   final buffer (no callbacks); the right tool is `StreamTarget`, which
- *   takes a `WritableStream<{type:'write', data, position}>`. mediabunny
- *   writes monotonically when `fastStart: 'fragmented'` is set, so we can
- *   forward each chunk straight to MSE in arrival order.
+ * - mediabunny's fMP4 muxer is a streaming muxer that requires monotonically
+ *   increasing timestamps. It cannot accept out-of-order packets after a seek.
+ *   Therefore, on each seek we create a **fresh** Output + sources + StreamTarget.
+ *   The MseSink handles the SourceBuffer reset via `invalidate()`.
+ *
+ * - Backpressure is enforced at two levels: in the WritableStream write handler
+ *   (limits append queue depth and total buffered time) and in the pump loop
+ *   (limits buffered-ahead and total buffered time). Without this, long files
+ *   dump gigabytes into the SourceBuffer and exhaust memory.
  */
 export interface RemuxPipeline {
-  start(): Promise<void>;
-  seek(time: number): Promise<void>;
+  start(fromTime?: number, autoPlay?: boolean): Promise<void>;
+  seek(time: number, autoPlay?: boolean): Promise<void>;
   destroy(): Promise<void>;
   stats(): Record<string, unknown>;
 }
@@ -44,16 +38,17 @@ export async function createRemuxPipeline(
   const audioTrackInfo = ctx.audioTracks[0];
   if (!videoTrackInfo) throw new Error("remux: source has no video track");
 
-  // Map UBMP codec names back to mediabunny's enum strings.
-  const mbVideoCodec = ubmpVideoToMediabunny(videoTrackInfo.codec);
+  // Map avbridge codec names back to mediabunny's enum strings.
+  const mbVideoCodec = avbridgeVideoToMediabunny(videoTrackInfo.codec);
   if (!mbVideoCodec) {
     throw new Error(`remux: video codec "${videoTrackInfo.codec}" is not supported by mediabunny output`);
   }
-  const mbAudioCodec = audioTrackInfo ? ubmpAudioToMediabunny(audioTrackInfo.codec) : null;
+  const mbAudioCodec = audioTrackInfo ? avbridgeAudioToMediabunny(audioTrackInfo.codec) : null;
 
-  // Open the input.
+  // Open the input. URL sources go through mediabunny's UrlSource so the
+  // muxer streams via Range requests instead of buffering the whole file.
   const input = new mb.Input({
-    source: new mb.BlobSource(asBlob(ctx.source)),
+    source: await buildMediabunnySourceFromInput(mb, ctx.source),
     formats: mb.ALL_FORMATS,
   });
   const allTracks = await input.getTracks();
@@ -68,69 +63,93 @@ export async function createRemuxPipeline(
     throw new Error("remux: audio track not found in input");
   }
 
-  // Pull WebCodecs decoder configs once — used as `meta` on the first packet
-  // we hand to each output source.
+  // Pull WebCodecs decoder configs once — used as `meta` on the first packet.
   const videoConfig = await inputVideo.getDecoderConfig();
   const audioConfig = inputAudio && inputAudio.isAudioTrack() ? await inputAudio.getDecoderConfig() : null;
 
-  // Set up the streaming target. We'll get monotonic writes here for
-  // fragmented mp4. We forward them all to the MSE sink as raw bytes.
-  let sink: MseSink | null = null;
-  const stats = { videoPackets: 0, audioPackets: 0, bytesWritten: 0, fragments: 0 };
-
-  // We need the precise MIME (with codec strings) before we can construct the
-  // MSE source buffer, but `output.getMimeType()` returns once codecs are
-  // known. So we delay opening the sink until the first write — by then
-  // mediabunny has the init segment ready and `getMimeType()` resolves.
-  let mimePromise: Promise<string> | null = null;
-
-  const writable = new WritableStream<{
-    type: "write";
-    data: Uint8Array<ArrayBuffer>;
-    position: number;
-  }>({
-    write: async (chunk) => {
-      if (!sink) {
-        const mime = await (mimePromise ??= output.getMimeType());
-        sink = new MseSink({ mime, video });
-        await sink.ready();
-      }
-      sink.append(chunk.data);
-      stats.bytesWritten += chunk.data.byteLength;
-      stats.fragments++;
-    },
-  });
-
-  const target = new mb.StreamTarget(writable);
-  const output = new mb.Output({
-    format: new mb.Mp4OutputFormat({ fastStart: "fragmented" }),
-    target,
-  });
-
-  // Build the output sources. Constructors are positional!
-  const videoSource = new mb.EncodedVideoPacketSource(mbVideoCodec);
-  output.addVideoTrack(videoSource);
-
-  type AudioSourceCtorArg = ConstructorParameters<typeof mb.EncodedAudioPacketSource>[0];
-  let audioSource: InstanceType<typeof mb.EncodedAudioPacketSource> | null = null;
-  if (mbAudioCodec && inputAudio?.isAudioTrack()) {
-    audioSource = new mb.EncodedAudioPacketSource(mbAudioCodec as AudioSourceCtorArg);
-    output.addAudioTrack(audioSource);
-  }
-
-  // Set up packet sinks (input side).
+  // Packet sinks (input side) — reused across seeks.
   const videoSink = new mb.EncodedPacketSink(inputVideo);
   const audioSink = inputAudio?.isAudioTrack() ? new mb.EncodedPacketSink(inputAudio) : null;
 
+  // MSE sink — created lazily on first output write, reused across seeks.
+  let sink: MseSink | null = null;
+  const stats = { videoPackets: 0, audioPackets: 0, bytesWritten: 0, fragments: 0 };
+
   let destroyed = false;
-  let pumpToken = 0; // bumped on seeks so old loops bail out
-  let started = false;
+  let pumpToken = 0;
+  let pendingAutoPlay = false;
+  let pendingStartTime = 0;
+
+  // The current Output instance. Recreated on each seek because mediabunny's
+  // fMP4 muxer requires monotonically increasing timestamps.
+  let currentOutput: InstanceType<typeof mb.Output> | null = null;
+
+  /**
+   * Create a fresh mediabunny Output wired to the MSE sink. Called once at
+   * start and again on each seek.
+   */
+  function createOutput() {
+    // Cancel the previous output if it exists.
+    if (currentOutput) {
+      try { void currentOutput.cancel(); } catch { /* ignore */ }
+    }
+
+    let mimePromise: Promise<string> | null = null;
+
+    const writable = new WritableStream<{
+      type: "write";
+      data: Uint8Array<ArrayBuffer>;
+      position: number;
+    }>({
+      write: async (chunk) => {
+        if (destroyed) return;
+        if (!sink) {
+          const mime = await (mimePromise ??= output.getMimeType());
+          sink = new MseSink({ mime, video });
+          await sink.ready();
+          // Apply deferred seek + autoPlay for the initial start.
+          if (pendingStartTime > 0) {
+            sink.invalidate(pendingStartTime);
+          }
+          sink.setPlayOnSeek(pendingAutoPlay);
+        }
+        // Backpressure: wait for the SourceBuffer append queue to drain.
+        while (sink && !destroyed && (sink.queueLength() > 10 || sink.bufferedAhead() > 60 || sink.totalBuffered() > 120)) {
+          await new Promise((r) => setTimeout(r, 500));
+        }
+        if (destroyed) return;
+        sink.append(chunk.data);
+        stats.bytesWritten += chunk.data.byteLength;
+        stats.fragments++;
+      },
+    });
+
+    const target = new mb.StreamTarget(writable);
+    const output = new mb.Output({
+      format: new mb.Mp4OutputFormat({ fastStart: "fragmented" }),
+      target,
+    });
+
+    // Build the output sources.
+    const videoSource = new mb.EncodedVideoPacketSource(mbVideoCodec!);
+    output.addVideoTrack(videoSource);
+
+    type AudioSourceCtorArg = ConstructorParameters<typeof mb.EncodedAudioPacketSource>[0];
+    let audioSource: InstanceType<typeof mb.EncodedAudioPacketSource> | null = null;
+    if (mbAudioCodec && inputAudio?.isAudioTrack()) {
+      audioSource = new mb.EncodedAudioPacketSource(mbAudioCodec as AudioSourceCtorArg);
+      output.addAudioTrack(audioSource);
+    }
+
+    currentOutput = output;
+    return { output, videoSource, audioSource };
+  }
 
   async function pumpLoop(token: number, fromTime: number) {
-    if (!started) {
-      await output.start();
-      started = true;
-    }
+    const { output, videoSource, audioSource } = createOutput();
+
+    await output.start();
+
 
     // Find the starting key packet so we never push partial GOPs.
     const startVideoPacket =
@@ -154,6 +173,17 @@ export async function createRemuxPipeline(
     let firstAudio = true;
 
     while (!destroyed && pumpToken === token && (!vNext.done || !aNext.done)) {
+      // Backpressure: pause pumping when we've buffered enough.
+      while (
+        !destroyed &&
+        pumpToken === token &&
+        sink &&
+        (sink.bufferedAhead() > 30 || sink.queueLength() > 20 || sink.totalBuffered() > 90)
+      ) {
+        await new Promise((r) => setTimeout(r, 500));
+      }
+      if (destroyed || pumpToken !== token) break;
+
       const vTs = !vNext.done ? vNext.value.timestamp : Number.POSITIVE_INFINITY;
       const aTs = !aNext.done ? aNext.value.timestamp : Number.POSITIVE_INFINITY;
 
@@ -185,24 +215,34 @@ export async function createRemuxPipeline(
   }
 
   return {
-    async start() {
-      pumpLoop(++pumpToken, 0).catch((err) => {
+    async start(fromTime = 0, autoPlay = false) {
+      // Store autoPlay/seekTime so the MseSink (created lazily on first
+      // write) can apply the deferred seek and auto-play.
+      pendingAutoPlay = autoPlay;
+      pendingStartTime = fromTime;
+      pumpLoop(++pumpToken, fromTime).catch((err) => {
         // eslint-disable-next-line no-console
-        console.error("[ubmp] remux pipeline failed:", err);
+        console.error("[avbridge] remux pipeline failed:", err);
         try { sink?.destroy(); } catch { /* ignore */ }
       });
     },
-    async seek(time) {
-      sink?.invalidate(time);
+    async seek(time, autoPlay = false) {
+      if (sink) {
+        sink.setPlayOnSeek(autoPlay);
+        sink.invalidate(time);
+      } else {
+        pendingAutoPlay = autoPlay;
+        pendingStartTime = time;
+      }
       pumpLoop(++pumpToken, time).catch((err) => {
         // eslint-disable-next-line no-console
-        console.error("[ubmp] remux pipeline reseek failed:", err);
+        console.error("[avbridge] remux pipeline reseek failed:", err);
       });
     },
     async destroy() {
       destroyed = true;
       pumpToken++;
-      try { await output.cancel(); } catch { /* ignore */ }
+      try { if (currentOutput) await currentOutput.cancel(); } catch { /* ignore */ }
       try { await input.dispose(); } catch { /* ignore */ }
       sink?.destroy();
     },
@@ -212,8 +252,3 @@ export async function createRemuxPipeline(
   };
 }
 
-function asBlob(source: unknown): Blob {
-  if (source instanceof Blob) return source;
-  if (source instanceof ArrayBuffer || source instanceof Uint8Array) return new Blob([source as BlobPart]);
-  throw new TypeError("remux: source must be a Blob/File/ArrayBuffer (URL sources are buffered earlier)");
-}

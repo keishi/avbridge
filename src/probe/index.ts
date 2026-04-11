@@ -1,5 +1,5 @@
-import type { ContainerKind, MediaContext, MediaSource_ } from "../types.js";
-import { normalizeSource, sniffContainer } from "../util/source.js";
+import type { ContainerKind, MediaContext, MediaInput } from "../types.js";
+import { normalizeSource, sniffNormalizedSource } from "../util/source.js";
 import { probeWithMediabunny } from "./mediabunny.js";
 
 /** Containers mediabunny can demux. Sniff results outside this set go straight to libav. */
@@ -13,6 +13,7 @@ const MEDIABUNNY_CONTAINERS = new Set<ContainerKind>([
   "mp3",
   "flac",
   "adts",
+  "mpegts",
 ]);
 
 /**
@@ -27,9 +28,9 @@ const MEDIABUNNY_CONTAINERS = new Set<ContainerKind>([
  *    `unknown` is included so genuinely unfamiliar files at least get a shot
  *    at the broader libav demuxer set.
  */
-export async function probe(source: MediaSource_): Promise<MediaContext> {
+export async function probe(source: MediaInput): Promise<MediaContext> {
   const normalized = await normalizeSource(source);
-  const sniffed = await sniffContainer(normalized.blob);
+  const sniffed = await sniffNormalizedSource(normalized);
 
   if (MEDIABUNNY_CONTAINERS.has(sniffed)) {
     try {
@@ -48,7 +49,7 @@ export async function probe(source: MediaSource_): Promise<MediaContext> {
   } catch (err) {
     const inner = err instanceof Error ? err.message : String(err);
     // eslint-disable-next-line no-console
-    console.error("[ubmp] libav probe failed for", sniffed, "file:", err);
+    console.error("[avbridge] libav probe failed for", sniffed, "file:", err);
     throw new Error(
       sniffed === "unknown"
         ? `unable to probe source: container could not be identified, and the libav.js fallback also failed: ${inner || "(no message — see browser console for the original error)"}`

@@ -50,6 +50,10 @@ const NATIVE_CONTAINERS = new Set<ContainerKind>([
  * with "unsupported or unrecognizable format". Files in those containers with
  * otherwise-native codecs (e.g. AVI + H.264 + MP3) must go to the fallback
  * strategy even though the *codecs* are browser-supported.
+ *
+ * MPEG-TS is in this set: mediabunny demuxes it natively, but browsers
+ * cannot play `<video src="*.ts">` directly (MPEG-TS is HLS-only), so even
+ * a TS file with H.264 + AAC has to go through the remux path.
  */
 const REMUXABLE_CONTAINERS = new Set<ContainerKind>([
   "mp4",
@@ -61,6 +65,7 @@ const REMUXABLE_CONTAINERS = new Set<ContainerKind>([
   "mp3",
   "flac",
   "adts",
+  "mpegts",
 ]);
 
 /**
@@ -153,7 +158,7 @@ export function classifyContext(ctx: MediaContext): Classification {
       class: "RISKY_NATIVE",
       strategy: "native",
       reason: `${video.codec} ${video.profile ?? ""} ${video.bitDepth ?? 8}-bit may stutter on mobile; will escalate to remux on stall`,
-      fallbackStrategy: "remux",
+      fallbackChain: ["remux", "hybrid", "fallback"],
     };
   }
 
@@ -169,15 +174,25 @@ export function classifyContext(ctx: MediaContext): Classification {
   }
 
   // Container is unreadable by mediabunny (AVI, ASF, FLV, etc.) but codecs
-  // are browser-supported. The fallback strategy will software-decode these
-  // even though hardware decode would be possible in a different container.
-  // TODO: a future "libav demux → WebCodecs decode" hybrid path could
-  // preserve hardware acceleration for this case.
+  // are browser-supported. Use the hybrid strategy (libav demux + WebCodecs
+  // hardware decode) when WebCodecs is available; otherwise full WASM decode.
+  if (webCodecsAvailable()) {
+    return {
+      class: "HYBRID_CANDIDATE",
+      strategy: "hybrid",
+      reason: `${ctx.container} container requires libav demux; codecs (${video.codec}${audio ? "/" + audio.codec : ""}) are hardware-decodable via WebCodecs`,
+      fallbackChain: ["fallback"],
+    };
+  }
   return {
     class: "FALLBACK_REQUIRED",
     strategy: "fallback",
-    reason: `${ctx.container} container cannot be remuxed by mediabunny; falling back to WASM decode despite native-supported codecs (${video.codec}${audio ? "/" + audio.codec : ""})`,
+    reason: `${ctx.container} container cannot be remuxed by mediabunny; falling back to WASM decode (${video.codec}${audio ? "/" + audio.codec : ""})`,
   };
+}
+
+function webCodecsAvailable(): boolean {
+  return typeof globalThis.VideoDecoder !== "undefined";
 }
 
 function isSafeNativeCombo(video: VideoTrackInfo, audio?: AudioTrackInfo): boolean {

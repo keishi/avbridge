@@ -8,12 +8,12 @@ import type { LibavVariant } from "./libav-loader.js";
  *   WebCodecs bridge. Used when the codec is browser-supported and we just
  *   need libav.js for demuxing or as a parser source.
  *
- * - **ubmp** (custom build, vendor/libav/) — has the AVI/ASF/FLV demuxers
+ * - **avbridge** (custom build, vendor/libav/) — has the AVI/ASF/FLV demuxers
  *   and the legacy decoders (WMV3, MPEG-4 Part 2, VC-1, MS-MPEG4 v1/2/3,
  *   AC-3, WMA*). Required for any of those formats; the npm variants ship
  *   none of them.
  *
- * Rule: pick "ubmp" if either the container or any codec is one only the
+ * Rule: pick "avbridge" if either the container or any codec is one only the
  * custom build can handle. Otherwise pick "webcodecs".
  */
 
@@ -32,12 +32,12 @@ const LEGACY_VIDEO_CODECS = new Set<VideoCodec>([
 const LEGACY_AUDIO_CODECS = new Set<AudioCodec>(["wmav2", "wmapro", "ac3", "eac3"]);
 
 export function pickLibavVariant(ctx: MediaContext): LibavVariant {
-  if (LEGACY_CONTAINERS.has(ctx.container)) return "ubmp";
+  if (LEGACY_CONTAINERS.has(ctx.container)) return "avbridge";
   for (const v of ctx.videoTracks) {
-    if (LEGACY_VIDEO_CODECS.has(v.codec)) return "ubmp";
+    if (LEGACY_VIDEO_CODECS.has(v.codec)) return "avbridge";
   }
   for (const a of ctx.audioTracks) {
-    if (LEGACY_AUDIO_CODECS.has(a.codec)) return "ubmp";
+    if (LEGACY_AUDIO_CODECS.has(a.codec)) return "avbridge";
   }
   return "webcodecs";
 }

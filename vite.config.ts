@@ -23,21 +23,13 @@ import { resolve } from "node:path";
  * (the libav variant binaries) are CORP-compliant under `require-corp`.
  */
 function crossOriginIsolation(): Plugin {
-  let hits = 0;
-  const apply = (req: { url?: string }, res: { setHeader: (k: string, v: string) => void }) => {
+  const apply = (_req: { url?: string }, res: { setHeader: (k: string, v: string) => void }) => {
     res.setHeader("Cross-Origin-Opener-Policy", "same-origin");
     res.setHeader("Cross-Origin-Embedder-Policy", "require-corp");
     res.setHeader("Cross-Origin-Resource-Policy", "same-origin");
-    hits++;
-    // Loud first-hit log so we can see in the terminal whether the
-    // middleware is even being called for the document request.
-    if (hits <= 5) {
-      // eslint-disable-next-line no-console
-      console.log(`[ubmp:coop-coep] applied to ${req.url ?? "(unknown)"}`);
-    }
   };
   return {
-    name: "ubmp:cross-origin-isolation",
+    name: "avbridge:cross-origin-isolation",
     // 1. Tell Vite about the headers via its own server.headers config —
     //    this is the supported route and works in most setups.
     config() {
@@ -95,7 +87,16 @@ export default defineConfig({
   plugins: [crossOriginIsolation()],
   resolve: {
     alias: {
-      ubmp: resolve(__dirname, "src/index.ts"),
+      avbridge: resolve(__dirname, "src/index.ts"),
+    },
+  },
+  build: {
+    rollupOptions: {
+      input: {
+        main: resolve(__dirname, "demo/index.html"),
+        convert: resolve(__dirname, "demo/convert.html"),
+        elementTest: resolve(__dirname, "demo/element-test.html"),
+      },
     },
   },
   server: {

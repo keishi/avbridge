@@ -6,7 +6,7 @@
  *   /libav/webcodecs/libav-webcodecs.mjs       (lightweight, modern formats)
  *   /libav/default/libav-default.mjs           (full-featured: AVI, ASF, …)
  *
- * UBMP uses the smaller webcodecs variant for the common path (probing modern
+ * avbridge uses the smaller webcodecs variant for the common path (probing modern
  * containers, bridging to WebCodecs) and only loads the heavier default
  * variant when a legacy container or codec actually needs it. This keeps the
  * cold start cost low for users who never touch a legacy file.
@@ -33,12 +33,12 @@ const variants = [
   { name: "webcodecs", pkg: "@libav.js/variant-webcodecs" },
 ];
 
-// The custom UBMP variant (with AVI/ASF/FLV demuxers + legacy decoders) is
+// The custom avbridge variant (with AVI/ASF/FLV demuxers + legacy decoders) is
 // not on npm — it's built locally via `scripts/build-libav.sh` and lands in
 // `vendor/libav/`. If that directory has files, copy them into the demo's
-// public path so Vite can serve them at /libav/ubmp/.
+// public path so Vite can serve them at /libav/avbridge/.
 const vendoredVariant = {
-  name: "ubmp",
+  name: "avbridge",
   src: resolve(repoRoot, "vendor/libav"),
 };
 
@@ -89,17 +89,17 @@ if (existsSync(vendoredVariant.src)) {
   }
   if (copied > 0) {
     console.log(
-      `[copy-libav] ubmp: ${copied} file(s) → demo/public/libav/ubmp/ (custom build)`,
+      `[copy-libav] avbridge: ${copied} file(s) → demo/public/libav/avbridge/ (custom build)`,
     );
     total += copied;
   } else {
     console.log(
-      `[copy-libav] ubmp: vendor/libav/ exists but is empty — run scripts/build-libav.sh to build`,
+      `[copy-libav] avbridge: vendor/libav/ exists but is empty — run scripts/build-libav.sh to build`,
     );
   }
 } else {
   console.log(
-    `[copy-libav] ubmp: not built (run scripts/build-libav.sh for AVI/WMV/legacy support)`,
+    `[copy-libav] avbridge: not built (run scripts/build-libav.sh for AVI/WMV/legacy support)`,
   );
 }
 

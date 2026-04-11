@@ -1,0 +1,242 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>avbridge converter</title>
+    <style>
+      :root { color-scheme: dark; }
+      body {
+        font-family: system-ui, sans-serif;
+        background: #111;
+        color: #eee;
+        margin: 0 auto;
+        padding: 24px;
+        max-width: 800px;
+      }
+      h1 { margin-top: 0; }
+      a { color: #5b9; }
+
+      .card {
+        background: #1a1a1a;
+        border-radius: 8px;
+        padding: 20px;
+        margin-bottom: 16px;
+      }
+      .card h2 {
+        margin-top: 0;
+        font-size: 16px;
+        font-weight: 600;
+        color: #aaa;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+      }
+
+      .row {
+        display: flex;
+        gap: 12px;
+        align-items: center;
+        margin-bottom: 12px;
+        flex-wrap: wrap;
+      }
+      label {
+        font-size: 14px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      input[type="file"] { color: #eee; }
+      input[type="number"] {
+        background: #2a2a2a;
+        color: #eee;
+        border: 1px solid #444;
+        border-radius: 4px;
+        padding: 4px 8px;
+        width: 80px;
+      }
+      select {
+        background: #2a2a2a;
+        color: #eee;
+        border: 1px solid #444;
+        border-radius: 4px;
+        padding: 6px 10px;
+        font-size: 14px;
+      }
+
+      button {
+        background: #2d6a4f;
+        color: #fff;
+        border: none;
+        padding: 10px 20px;
+        border-radius: 4px;
+        font-size: 14px;
+        font-weight: 600;
+        cursor: pointer;
+      }
+      button:hover:not(:disabled) { background: #38855e; }
+      button:disabled { opacity: 0.4; cursor: not-allowed; }
+      button.secondary { background: #444; }
+      button.secondary:hover:not(:disabled) { background: #555; }
+      button.danger { background: #9d2929; }
+
+      .progress {
+        height: 24px;
+        background: #2a2a2a;
+        border-radius: 12px;
+        overflow: hidden;
+        position: relative;
+      }
+      .progress-bar {
+        height: 100%;
+        background: linear-gradient(90deg, #2d6a4f, #5b9);
+        width: 0;
+        transition: width 0.2s ease-out;
+      }
+      .progress-label {
+        position: absolute;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 12px;
+        font-weight: 600;
+        color: #fff;
+        text-shadow: 0 0 2px rgba(0, 0, 0, 0.8), 0 1px 2px rgba(0, 0, 0, 0.6);
+      }
+
+      .info {
+        font-family: ui-monospace, "SF Mono", Menlo, monospace;
+        font-size: 12px;
+        background: #0f0f0f;
+        border-radius: 4px;
+        padding: 12px;
+        white-space: pre-wrap;
+        color: #aaa;
+      }
+
+      .hidden { display: none !important; }
+      .err { color: #ff8585; margin: 12px 0; }
+      .badge {
+        display: inline-block;
+        padding: 2px 8px;
+        border-radius: 10px;
+        font-size: 11px;
+        background: #333;
+        color: #ccc;
+      }
+      .badge.remux { background: #1e6091; color: #fff; }
+      .badge.transcode { background: #c77dff; color: #fff; }
+    </style>
+  </head>
+  <body>
+    <h1>avbridge converter</h1>
+    <p>
+      <a href="./">Player</a> ·
+      <a href="./convert.html">Converter</a>
+    </p>
+    <p>Convert media files into modern browser-friendly formats. Powered by mediabunny + WebCodecs.</p>
+
+    <div class="card">
+      <h2>1. Source</h2>
+      <div class="row">
+        <input id="file" type="file" accept="video/*,audio/*,.mkv,.avi,.wmv,.flv,.mov" />
+      </div>
+      <pre id="source-info" class="info hidden"></pre>
+    </div>
+
+    <div class="card" id="config-card">
+      <h2>2. Output</h2>
+
+      <div class="row">
+        <label>Container:
+          <select id="container">
+            <option value="mp4">MP4</option>
+            <option value="webm">WebM</option>
+            <option value="mkv">MKV</option>
+          </select>
+        </label>
+        <span id="mode-badge" class="badge"></span>
+      </div>
+
+      <div class="row">
+        <label>Video codec:
+          <select id="video-codec">
+            <option value="copy">Copy (no re-encode)</option>
+            <option value="h264">H.264</option>
+            <option value="h265">H.265 / HEVC</option>
+            <option value="vp9">VP9</option>
+            <option value="av1">AV1</option>
+          </select>
+        </label>
+        <label>Audio codec:
+          <select id="audio-codec">
+            <option value="copy">Copy (no re-encode)</option>
+            <option value="aac">AAC</option>
+            <option value="opus">Opus</option>
+            <option value="flac">FLAC</option>
+          </select>
+        </label>
+      </div>
+
+      <div class="row" id="quality-row">
+        <label>Quality:
+          <select id="quality">
+            <option value="low">Low</option>
+            <option value="medium" selected>Medium</option>
+            <option value="high">High</option>
+            <option value="very-high">Very High</option>
+          </select>
+        </label>
+        <label>Video bitrate (kbps): <input id="video-bitrate" type="number" min="0" placeholder="auto" /></label>
+        <label>Audio bitrate (kbps): <input id="audio-bitrate" type="number" min="0" placeholder="auto" /></label>
+      </div>
+
+      <div class="row" id="resize-row">
+        <label>Width: <input id="width" type="number" min="0" placeholder="auto" /></label>
+        <label>Height: <input id="height" type="number" min="0" placeholder="auto" /></label>
+        <label>FPS: <input id="fps" type="number" min="0" placeholder="auto" /></label>
+      </div>
+
+      <details id="advanced-details" style="margin-top:8px; background:#0f0f0f; padding:10px 12px; border-radius:6px;">
+        <summary style="cursor:pointer; color:#aaa; font-size:13px;">Advanced</summary>
+        <div class="row" style="margin-top:10px;">
+          <label>Encoder:
+            <select id="hw-accel">
+              <option value="no-preference">Auto (browser picks)</option>
+              <option value="prefer-hardware">Prefer hardware (faster)</option>
+              <option value="prefer-software">Prefer software (better quality)</option>
+            </select>
+          </label>
+        </div>
+        <p style="font-size:12px; color:#888; margin:8px 0 0 0;">
+          Hardware encoders are faster and may use the GPU. Software encoders typically produce better
+          quality at low bitrates and are recommended for archival.
+        </p>
+      </details>
+    </div>
+
+    <div class="card">
+      <h2>3. Convert</h2>
+      <div class="row">
+        <button id="start" disabled>Start conversion</button>
+        <button id="cancel" class="danger hidden">Cancel</button>
+        <button id="download" class="secondary hidden">Download result</button>
+      </div>
+
+      <div class="progress" id="progress-wrap" style="margin-top:12px;">
+        <div class="progress-bar" id="progress-bar"></div>
+        <div class="progress-label" id="progress-label">0%</div>
+      </div>
+
+      <p id="status" style="margin-top:12px; color:#aaa; font-size:13px;"></p>
+      <p id="error" class="err"></p>
+    </div>
+
+    <details>
+      <summary>Result info</summary>
+      <pre id="result-info" class="info">No conversion run yet.</pre>
+    </details>
+
+    <script type="module" src="./convert.ts"></script>
+  </body>
+</html>

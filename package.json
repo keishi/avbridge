@@ -1,30 +1,41 @@
 {
-  "name": "ubmp",
-  "version": "0.1.0",
-  "description": "Universal Browser Media Player — play any local media file in the browser via native, remux, or WASM-decode strategies.",
+  "name": "avbridge",
+  "version": "1.0.0",
+  "description": "Play and convert arbitrary video files in the browser. Native, remux, hybrid, fallback, and transcode — one API.",
   "license": "MIT",
+  "author": "Keishi Hattori",
+  "homepage": "https://github.com/keishi/avbridge#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/keishi/ubmp.git"
+    "url": "git+https://github.com/keishi/avbridge.git"
   },
   "bugs": {
-    "url": "https://github.com/keishi/ubmp/issues"
+    "url": "https://github.com/keishi/avbridge/issues"
   },
   "keywords": [
     "media-player",
     "video",
     "audio",
     "browser",
+    "transcode",
+    "remux",
     "webcodecs",
     "mse",
+    "mediabunny",
     "avi",
     "mkv",
     "wmv",
     "divx",
+    "mpegts",
     "libav",
-    "wasm"
+    "wasm",
+    "web-component"
   ],
   "type": "module",
+  "sideEffects": [
+    "./dist/element.js",
+    "./dist/element.cjs"
+  ],
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -33,12 +44,19 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js",
       "require": "./dist/index.cjs"
+    },
+    "./element": {
+      "types": "./dist/element.d.ts",
+      "import": "./dist/element.js",
+      "require": "./dist/element.cjs"
     }
   },
   "files": [
     "dist",
     "src",
-    "README.md"
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE"
   ],
   "scripts": {
     "build": "tsup",
@@ -50,7 +68,12 @@
     "predemo:build": "node scripts/copy-libav.mjs",
     "demo:build": "vite build",
     "build:libav": "./scripts/build-libav.sh",
-    "test:playback": "node scripts/playback-test.mjs"
+    "test:playback": "node scripts/playback-test.mjs",
+    "test:convert": "node scripts/convert-test.mjs",
+    "test:element": "node scripts/element-test.mjs",
+    "test:url-streaming": "node scripts/url-streaming-test.mjs",
+    "fixtures": "node scripts/generate-fixtures.mjs",
+    "audit:bundle": "node scripts/bundle-audit.mjs"
   },
   "dependencies": {
     "mediabunny": "^1.40.1"

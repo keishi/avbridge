@@ -18,21 +18,41 @@ export async function createRemuxSession(
       `remux strategy failed to start: ${(err as Error).message}. The container or codec combination is not supported by mediabunny + MSE on this browser.`,
     );
   }
-  await pipeline.start();
+
+  // Don't pump yet — wait for the first play() or seek() to start from the
+  // right position. The player's strategy-switch flow calls seek(currentTime)
+  // immediately after creation, so pumping from 0 here would be wasted work.
+  let started = false;
+  let wantPlay = false;
 
   return {
     strategy: "remux",
     async play() {
+      wantPlay = true;
+      if (!started) {
+        // First play — start the pump. The deferred seek in MseSink will
+        // call video.play() once data is available (via autoPlay flag).
+        started = true;
+        await pipeline.start(video.currentTime || 0, true);
+        return;
+      }
       await video.play();
     },
     pause() {
+      wantPlay = false;
       video.pause();
     },
     async seek(time) {
-      // The <video> seek alone won't work past unbuffered ranges; we have to
-      // tell the pipeline to invalidate and re-pump.
-      video.currentTime = time;
-      await pipeline.seek(time);
+      if (!started) {
+        started = true;
+        // autoPlay=true so playback starts as soon as data arrives at
+        // the seek target (handles the strategy-switch case where play()
+        // is called right after seek()).
+        await pipeline.seek(time, wantPlay);
+        return;
+      }
+      const wasPlaying = !video.paused;
+      await pipeline.seek(time, wasPlaying || wantPlay);
     },
     async setAudioTrack(_id) {
       // v1: single-track output. Multi-audio remuxing is post-MVP.
@@ -42,6 +62,9 @@ export async function createRemuxSession(
       for (let i = 0; i < tracks.length; i++) {
         tracks[i].mode = i === id ? "showing" : "disabled";
       }
+    },
+    getCurrentTime() {
+      return video.currentTime || 0;
     },
     async destroy() {
       video.pause();

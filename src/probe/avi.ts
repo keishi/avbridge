@@ -7,6 +7,7 @@ import type {
   VideoTrackInfo,
 } from "../types.js";
 import type { NormalizedSource } from "../util/source.js";
+import { prepareLibavInput, type LibavInputHandle } from "../util/libav-http-reader.js";
 import { loadLibav } from "../strategies/fallback/libav-loader.js";
 
 /**
@@ -25,13 +26,16 @@ export async function probeWithLibav(
   sniffed: ContainerKind,
 ): Promise<MediaContext> {
   // AVI/ASF/FLV demuxers are not in any libav.js npm variant — they live in
-  // the custom "ubmp" build produced by `scripts/build-libav.sh`. The loader
+  // the custom "avbridge" build produced by `scripts/build-libav.sh`. The loader
   // emits an actionable error if the build hasn't been run yet. Threading
   // is OFF by default in `loadLibav` (see the comment there for why).
-  const libav = (await loadLibav("ubmp")) as unknown as LibavInstance;
+  const libav = (await loadLibav("avbridge")) as unknown as LibavInstance;
 
   const filename = source.name ?? `input.${sniffed === "unknown" ? "bin" : sniffed}`;
-  await libav.mkreadaheadfile(filename, source.blob);
+  // For Blob/File sources we use libav's in-memory readahead file. For URL
+  // sources we attach an HTTP block reader so libav demuxes via Range
+  // requests instead of buffering the whole file.
+  const handle: LibavInputHandle = await prepareLibavInput(libav as unknown as Parameters<typeof prepareLibavInput>[0], filename, source);
 
   let fmt_ctx: number | undefined;
   let streams: LibavStream[] = [];
@@ -40,7 +44,7 @@ export async function probeWithLibav(
     fmt_ctx = result[0];
     streams = result[1];
   } catch (err) {
-    await libav.unlinkreadaheadfile(filename).catch(() => {});
+    await handle.detach().catch(() => {});
     // Errors thrown across the libav.js worker/pthread boundary aren't
     // always Error instances — they can be plain objects, numbers (errno
     // codes), or strings. Stringify defensively so the user-facing message
@@ -52,7 +56,7 @@ export async function probeWithLibav(
           ? JSON.stringify(err)
           : String(err);
     // eslint-disable-next-line no-console
-    console.error("[ubmp] ff_init_demuxer_file raw error:", err);
+    console.error("[avbridge] ff_init_demuxer_file raw error:", err);
     throw new Error(
       `libav.js could not demux ${filename}. The current libav variant likely lacks the required demuxer (e.g. AVI). See vendor/libav/README.md for build instructions. (${inner || "no message — see console for raw error"})`,
     );
@@ -70,7 +74,7 @@ export async function probeWithLibav(
     if (stream.codec_type === libav.AVMEDIA_TYPE_VIDEO) {
       videoTracks.push({
         id: stream.index,
-        codec: ffmpegToUbmpVideo(codecName),
+        codec: ffmpegToAvbridgeVideo(codecName),
         width: codecpar?.width ?? 0,
         height: codecpar?.height ?? 0,
         fps: framerate(stream),
@@ -78,7 +82,7 @@ export async function probeWithLibav(
     } else if (stream.codec_type === libav.AVMEDIA_TYPE_AUDIO) {
       audioTracks.push({
         id: stream.index,
-        codec: ffmpegToUbmpAudio(codecName),
+        codec: ffmpegToAvbridgeAudio(codecName),
         channels: codecpar?.channels ?? codecpar?.ch_layout_nb_channels ?? 0,
         sampleRate: codecpar?.sample_rate ?? 0,
       });
@@ -92,7 +96,7 @@ export async function probeWithLibav(
   // Close the demuxer; the strategy will reopen it later if it ends up being
   // chosen. Probing should not pin native resources.
   await libav.avformat_close_input_js(fmt_ctx!).catch(() => {});
-  await libav.unlinkreadaheadfile(filename).catch(() => {});
+  await handle.detach().catch(() => {});
 
   return {
     source: source.original,
@@ -152,8 +156,8 @@ async function safe<T>(fn: () => Promise<T> | T): Promise<T | undefined> {
   try { return await fn(); } catch { return undefined; }
 }
 
-/** Map FFmpeg codec names to UBMP video codec identifiers. */
-function ffmpegToUbmpVideo(name: string): VideoCodec {
+/** Map FFmpeg codec names to avbridge video codec identifiers. */
+function ffmpegToAvbridgeVideo(name: string): VideoCodec {
   switch (name) {
     case "h264":   return "h264";
     case "hevc":   return "h265";
@@ -179,7 +183,7 @@ function ffmpegToUbmpVideo(name: string): VideoCodec {
   }
 }
 
-function ffmpegToUbmpAudio(name: string): AudioCodec {
+function ffmpegToAvbridgeAudio(name: string): AudioCodec {
   switch (name) {
     case "aac":    return "aac";
     case "mp3":

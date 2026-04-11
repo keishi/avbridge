@@ -1,8 +1,8 @@
 /**
- * Core types shared across UBMP modules.
+ * Core types shared across avbridge modules.
  *
  * The four main concepts:
- * - {@link MediaSource_} — what the user gives us (File / Blob / URL / bytes).
+ * - {@link MediaInput} — what the user gives us (File / Blob / URL / bytes).
  * - {@link MediaContext} — what we learned about it from probing.
  * - {@link Classification} — which playback strategy we picked.
  * - {@link PlaybackSession} — the running playback, returned by a strategy.
@@ -12,7 +12,7 @@
  * Anything we accept as a media source. We do not accept arbitrary
  * `ReadableStream`s in v1 because we need random access for seeking.
  */
-export type MediaSource_ = File | Blob | string | URL | ArrayBuffer | Uint8Array;
+export type MediaInput = File | Blob | string | URL | ArrayBuffer | Uint8Array;
 
 /** Container format families we know about. */
 export type ContainerKind =
@@ -28,6 +28,7 @@ export type ContainerKind =
   | "mp3"
   | "flac"
   | "adts"
+  | "mpegts"
   | "unknown";
 
 /** Video codec families. Strings, not enums, so plugins can extend. */
@@ -101,7 +102,7 @@ export interface SubtitleTrackInfo {
  * This is the input to the classification engine.
  */
 export interface MediaContext {
-  source: MediaSource_;
+  source: MediaInput;
   /** Stable display name for diagnostics, if we have one. */
   name?: string;
   byteLength?: number;
@@ -115,11 +116,27 @@ export interface MediaContext {
   duration?: number;
 }
 
-export type StrategyName = "native" | "remux" | "fallback";
+/**
+ * The four playback strategies, ordered from lightest to heaviest:
+ * - `"native"` — direct `<video>` playback (zero overhead)
+ * - `"remux"` — repackage to fragmented MP4 via MSE (preserves hardware decode)
+ * - `"hybrid"` — libav.js demux + WebCodecs hardware decode (for AVI/ASF/FLV with modern codecs)
+ * - `"fallback"` — full WASM software decode via libav.js (universal, CPU-intensive)
+ */
+export type StrategyName = "native" | "remux" | "hybrid" | "fallback";
 
+/**
+ * Classification outcome from the rules engine. Determines which strategy to use:
+ * - `NATIVE` — browser plays this directly
+ * - `REMUX_CANDIDATE` — codecs are native, container needs repackaging
+ * - `HYBRID_CANDIDATE` — container needs libav demux, codecs are hardware-decodable
+ * - `FALLBACK_REQUIRED` — codec has no browser decoder, WASM decode needed
+ * - `RISKY_NATIVE` — might work natively but may stall (e.g. Hi10P, 4K120)
+ */
 export type StrategyClass =
   | "NATIVE"
   | "REMUX_CANDIDATE"
+  | "HYBRID_CANDIDATE"
   | "FALLBACK_REQUIRED"
   | "RISKY_NATIVE";
 
@@ -128,10 +145,10 @@ export interface Classification {
   strategy: StrategyName;
   reason: string;
   /**
-   * If `class === "RISKY_NATIVE"`, the strategy to escalate to if native
-   * playback stalls.
+   * Ordered list of strategies to try if the primary fails or stalls.
+   * The player pops from the front on each escalation.
    */
-  fallbackStrategy?: StrategyName;
+  fallbackChain?: StrategyName[];
 }
 
 /**
@@ -149,6 +166,10 @@ export interface PlaybackSession {
   destroy(): Promise<void>;
   /** Strategy-specific runtime stats merged into Diagnostics. */
   getRuntimeStats(): Record<string, unknown>;
+  /** Current playback position in seconds. Used to capture position before strategy switch. */
+  getCurrentTime(): number;
+  /** Register a callback for unrecoverable errors that should trigger escalation. */
+  onFatalError?(handler: (reason: string) => void): void;
 }
 
 export interface DiagnosticsSnapshot {
@@ -163,7 +184,25 @@ export interface DiagnosticsSnapshot {
   strategyClass: StrategyClass | "pending";
   reason: string;
   probedBy?: "mediabunny" | "libav" | "sniff";
+  /**
+   * Where the source is coming from. `"blob"` means File / Blob /
+   * ArrayBuffer / Uint8Array (in-memory). `"url"` means an HTTP/HTTPS URL
+   * being streamed via Range requests.
+   */
+  sourceType?: "blob" | "url";
+  /**
+   * Transport used to read the source. `"memory"` for in-memory blobs;
+   * `"http-range"` for URL sources streamed via HTTP Range requests.
+   */
+  transport?: "memory" | "http-range";
+  /**
+   * For URL sources, true if the server supports HTTP Range requests
+   * (the only mode we accept — see `attachLibavHttpReader`). Always true
+   * when `transport === "http-range"` because we fail fast otherwise.
+   */
+  rangeSupported?: boolean;
   runtime?: Record<string, unknown>;
+  strategyHistory?: Array<{ strategy: StrategyName; reason: string; at: number }>;
 }
 
 /** §8.2 plugin interface, kept structurally identical to the design doc. */
@@ -176,7 +215,7 @@ export interface Plugin {
 
 /** Player creation options. */
 export interface CreatePlayerOptions {
-  source: MediaSource_;
+  source: MediaInput;
   target: HTMLVideoElement;
   /**
    * Optional explicit subtitle list. The player otherwise tries to discover
@@ -196,11 +235,17 @@ export interface CreatePlayerOptions {
   forceStrategy?: StrategyName;
   /** Inject extra plugins; they take priority over built-ins. */
   plugins?: Plugin[];
+  /**
+   * When true (default), the player automatically escalates to the next
+   * strategy in the fallback chain on failure or stall.
+   */
+  autoEscalate?: boolean;
 }
 
 /** Events emitted by {@link UnifiedPlayer}. Strongly typed. */
 export interface PlayerEventMap {
   strategy: { strategy: StrategyName; reason: string };
+  strategychange: { from: StrategyName; to: StrategyName; reason: string; currentTime: number };
   tracks: {
     video: VideoTrackInfo[];
     audio: AudioTrackInfo[];
@@ -216,3 +261,100 @@ export type PlayerEventName = keyof PlayerEventMap;
 
 /** Generic listener type re-exported for player.on overloads. */
 export type Listener<T> = (payload: T) => void;
+
+// ── Conversion types ────────────────────────────────────────────────────
+
+/** Target output format for conversion functions. */
+export type OutputFormat = "mp4" | "webm" | "mkv";
+
+/** Options for standalone conversion functions ({@link remux}, transcode). */
+export interface ConvertOptions {
+  /** Target container format. Default: `"mp4"`. */
+  outputFormat?: OutputFormat;
+  /** AbortSignal to cancel the operation. */
+  signal?: AbortSignal;
+  /** Called periodically with progress information. */
+  onProgress?: (info: ProgressInfo) => void;
+  /** When true, reject on any uncertain codec/container combo. Default: `false` (best-effort). */
+  strict?: boolean;
+}
+
+/** Progress information passed to {@link ConvertOptions.onProgress}. */
+export interface ProgressInfo {
+  /** Estimated completion percentage, 0–100. */
+  percent: number;
+  /** Total bytes written to the output so far. */
+  bytesWritten: number;
+}
+
+/** Quality preset for transcode. */
+export type TranscodeQuality = "low" | "medium" | "high" | "very-high";
+
+/** Modern video codecs supported as transcode targets. */
+export type OutputVideoCodec = "h264" | "h265" | "vp9" | "av1";
+
+/** Modern audio codecs supported as transcode targets. */
+export type OutputAudioCodec = "aac" | "opus" | "flac";
+
+/**
+ * Hardware acceleration hint for WebCodecs encoders.
+ * - `"no-preference"` (default) — let the browser pick
+ * - `"prefer-hardware"` — faster, may produce slightly lower quality at low bitrates
+ * - `"prefer-software"` — better quality at low bitrates, slower; recommended for archival
+ */
+export type HardwareAccelerationHint = "no-preference" | "prefer-hardware" | "prefer-software";
+
+/** Options for {@link transcode}. Extends {@link ConvertOptions} with codec/quality. */
+export interface TranscodeOptions extends ConvertOptions {
+  /** Target video codec. Default: `"h264"` for mp4/mkv, `"vp9"` for webm. */
+  videoCodec?: OutputVideoCodec;
+  /** Target audio codec. Default: `"aac"` for mp4/mkv, `"opus"` for webm. */
+  audioCodec?: OutputAudioCodec;
+  /** Quality preset. Default: `"medium"`. Maps to mediabunny `Quality` levels. */
+  quality?: TranscodeQuality;
+  /** Explicit video bitrate in bits per second. Overrides `quality`. */
+  videoBitrate?: number;
+  /** Explicit audio bitrate in bits per second. Overrides `quality`. */
+  audioBitrate?: number;
+  /** Target output width in pixels. Height is auto-deduced if not set. */
+  width?: number;
+  /** Target output height in pixels. Width is auto-deduced if not set. */
+  height?: number;
+  /** Target output frame rate. */
+  frameRate?: number;
+  /** Drop the video track entirely (audio-only output). */
+  dropVideo?: boolean;
+  /** Drop the audio track entirely (silent output). */
+  dropAudio?: boolean;
+  /**
+   * Hardware acceleration hint for the WebCodecs video encoder. Default: `"no-preference"`.
+   * Set to `"prefer-software"` for archival-quality encodes at low bitrates;
+   * `"prefer-hardware"` for fast batch transcoding where speed matters more than the last
+   * few percent of quality.
+   */
+  hardwareAcceleration?: HardwareAccelerationHint;
+}
+
+/** Result of a standalone conversion ({@link remux} or transcode). */
+export interface ConvertResult {
+  /** The converted file as a Blob, ready for download or further processing. */
+  blob: Blob;
+  /** Full MIME type string, e.g. `"video/mp4"`. */
+  mimeType: string;
+  /** Container format name: `"mp4"`, `"webm"`, or `"mkv"`. */
+  container: OutputFormat;
+  /** Video codec in the output, if present. */
+  videoCodec?: string;
+  /** Audio codec in the output, if present. */
+  audioCodec?: string;
+  /** Duration in seconds, if known. */
+  duration?: number;
+  /** Suggested filename for download. */
+  filename?: string;
+  /**
+   * Diagnostic notes about how the conversion ran. Currently records
+   * automatic retry of WebCodecs encoder failures (a known headless
+   * Chromium first-call init bug for the H.264 encoder).
+   */
+  notes?: string[];
+}

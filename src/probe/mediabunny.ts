@@ -19,7 +19,7 @@ import type { NormalizedSource } from "../util/source.js";
  * - For decoder metadata + codec parameter strings we call
  *   `getDecoderConfig()` and `getCodecParameterString()` on the typed track.
  *
- * The bridging back to UBMP's own codec naming (`h264` instead of mediabunny's
+ * The bridging back to avbridge's own codec naming (`h264` instead of mediabunny's
  * `avc`) happens here so the rest of the codebase keeps a single vocabulary.
  */
 export async function probeWithMediabunny(
@@ -28,7 +28,7 @@ export async function probeWithMediabunny(
 ): Promise<MediaContext> {
   const mb = await import("mediabunny");
   const input = new mb.Input({
-    source: new mb.BlobSource(source.blob),
+    source: await buildMediabunnySource(mb, source),
     formats: mb.ALL_FORMATS,
   });
 
@@ -43,7 +43,7 @@ export async function probeWithMediabunny(
       const codecParam = await safe(() => track.getCodecParameterString());
       videoTracks.push({
         id: track.id,
-        codec: mediabunnyVideoToUbmp(track.codec),
+        codec: mediabunnyVideoToAvbridge(track.codec),
         width: track.displayWidth ?? track.codedWidth ?? 0,
         height: track.displayHeight ?? track.codedHeight ?? 0,
         codecString: codecParam ?? undefined,
@@ -52,7 +52,7 @@ export async function probeWithMediabunny(
       const codecParam = await safe(() => track.getCodecParameterString());
       audioTracks.push({
         id: track.id,
-        codec: mediabunnyAudioToUbmp(track.codec),
+        codec: mediabunnyAudioToAvbridge(track.codec),
         channels: track.numberOfChannels ?? 0,
         sampleRate: track.sampleRate ?? 0,
         language: track.languageCode,
@@ -77,6 +77,44 @@ export async function probeWithMediabunny(
   };
 }
 
+/**
+ * Build the right mediabunny `Source` for a normalized input. URL sources
+ * use `UrlSource` (Range requests, prefetch, parallelism) so we don't
+ * buffer the whole file into memory. Blob/File sources use `BlobSource`.
+ *
+ * Exported so the remux strategy can use the same routing logic.
+ */
+export async function buildMediabunnySource(
+  mb: typeof import("mediabunny"),
+  source: NormalizedSource,
+): Promise<InstanceType<typeof mb.BlobSource> | InstanceType<typeof mb.UrlSource>> {
+  if (source.kind === "url") {
+    return new mb.UrlSource(source.url);
+  }
+  return new mb.BlobSource(source.blob);
+}
+
+/**
+ * Build a mediabunny `Source` directly from a raw `MediaInput`, bypassing
+ * `normalizeSource`. Used by strategies that already have the original
+ * input on hand (via `MediaContext.source`) and don't need a sniff window.
+ *
+ * This is the routing point that decides "stream from URL via Range
+ * requests" vs "wrap in-memory bytes as BlobSource". Always prefer
+ * `UrlSource` for URL inputs so we don't accidentally buffer the file.
+ */
+export async function buildMediabunnySourceFromInput(
+  mb: typeof import("mediabunny"),
+  source: import("../types.js").MediaInput,
+): Promise<InstanceType<typeof mb.BlobSource> | InstanceType<typeof mb.UrlSource>> {
+  if (typeof source === "string") return new mb.UrlSource(source);
+  if (source instanceof URL) return new mb.UrlSource(source.toString());
+  if (source instanceof Blob) return new mb.BlobSource(source);
+  if (source instanceof ArrayBuffer) return new mb.BlobSource(new Blob([source]));
+  if (source instanceof Uint8Array) return new mb.BlobSource(new Blob([source as BlobPart]));
+  throw new TypeError("unsupported source type for mediabunny");
+}
+
 function resolveContainer(formatName: string | undefined, sniffed: ContainerKind): ContainerKind {
   const name = (formatName ?? "").toLowerCase();
   if (name.includes("matroska") || name.includes("mkv")) return "mkv";
@@ -88,11 +126,12 @@ function resolveContainer(formatName: string | undefined, sniffed: ContainerKind
   if (name.includes("flac")) return "flac";
   if (name.includes("mp3")) return "mp3";
   if (name.includes("adts") || name.includes("aac")) return "adts";
+  if (name.includes("mpegts") || name.includes("mpeg-ts") || name.includes("transport")) return "mpegts";
   return sniffed;
 }
 
-/** Mediabunny video codec → UBMP video codec. */
-export function mediabunnyVideoToUbmp(c: string | null | undefined): VideoCodec {
+/** Mediabunny video codec → avbridge video codec. */
+export function mediabunnyVideoToAvbridge(c: string | null | undefined): VideoCodec {
   switch (c) {
     case "avc":  return "h264";
     case "hevc": return "h265";
@@ -103,8 +142,8 @@ export function mediabunnyVideoToUbmp(c: string | null | undefined): VideoCodec 
   }
 }
 
-/** UBMP video codec → mediabunny video codec (for output sources). */
-export function ubmpVideoToMediabunny(c: VideoCodec): "avc" | "hevc" | "vp9" | "vp8" | "av1" | null {
+/** avbridge video codec → mediabunny video codec (for output sources). */
+export function avbridgeVideoToMediabunny(c: VideoCodec): "avc" | "hevc" | "vp9" | "vp8" | "av1" | null {
   switch (c) {
     case "h264": return "avc";
     case "h265": return "hevc";
@@ -115,7 +154,7 @@ export function ubmpVideoToMediabunny(c: VideoCodec): "avc" | "hevc" | "vp9" | "
   }
 }
 
-export function mediabunnyAudioToUbmp(c: string | null | undefined): AudioCodec {
+export function mediabunnyAudioToAvbridge(c: string | null | undefined): AudioCodec {
   switch (c) {
     case "aac":    return "aac";
     case "mp3":    return "mp3";
@@ -128,7 +167,7 @@ export function mediabunnyAudioToUbmp(c: string | null | undefined): AudioCodec 
   }
 }
 
-export function ubmpAudioToMediabunny(c: AudioCodec): string | null {
+export function avbridgeAudioToMediabunny(c: AudioCodec): string | null {
   switch (c) {
     case "aac":    return "aac";
     case "mp3":    return "mp3";

@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 #
-# Build the custom UBMP libav.js variant.
+# Build the custom AVBRIDGE libav.js variant.
 #
 # This produces a single WASM binary that includes the demuxers + decoders
-# UBMP needs for legacy file playback (AVI, ASF, FLV, MKV with WMV3, MPEG-4
+# AVBRIDGE needs for legacy file playback (AVI, ASF, FLV, MKV with WMV3, MPEG-4
 # Part 2 / DivX / Xvid, …). The npm-published libav.js variants are
 # intentionally minimal and ship none of this; building locally is the
 # supported path.
@@ -12,27 +12,27 @@
 #   - macOS or Linux
 #   - git, make, python3, a working C toolchain (Xcode Command Line Tools on
 #     macOS, build-essential on Linux)
-#   - ~2 GB free disk in $UBMP_BUILD_CACHE
+#   - ~2 GB free disk in $AVBRIDGE_BUILD_CACHE
 #   - 15-30 minutes of CPU time
 #
 # This script does NOT touch your system Python, Homebrew, or any global
-# package manager. emsdk is fetched into UBMP_BUILD_CACHE (defaults to
-# ~/.cache/ubmp) and only modifies its own directory.
+# package manager. emsdk is fetched into AVBRIDGE_BUILD_CACHE (defaults to
+# ~/.cache/avbridge) and only modifies its own directory.
 #
 # Usage:
 #   ./scripts/build-libav.sh                  # build with defaults
-#   UBMP_BUILD_CACHE=/tmp/ubmp build-libav.sh # custom cache location
-#   UBMP_LIBAV_CLEAN=1 build-libav.sh         # force rebuild from scratch
+#   AVBRIDGE_BUILD_CACHE=/tmp/avbridge build-libav.sh # custom cache location
+#   AVBRIDGE_LIBAV_CLEAN=1 build-libav.sh         # force rebuild from scratch
 #
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-CACHE="${UBMP_BUILD_CACHE:-$HOME/.cache/ubmp}"
+CACHE="${AVBRIDGE_BUILD_CACHE:-$HOME/.cache/avbridge}"
 EMSDK_DIR="$CACHE/emsdk"
 LIBAV_DIR="$CACHE/libav.js"
 LIBAV_VERSION="6.8.8.0"
 LIBAV_TAG="v${LIBAV_VERSION}"
-VARIANT_NAME="ubmp"
+VARIANT_NAME="avbridge"
 VENDOR_DIR="$REPO_ROOT/vendor/libav"
 
 # Compiler optimization flags. The libav.js Makefile defaults to OPTFLAGS=-Oz
@@ -43,8 +43,8 @@ VENDOR_DIR="$REPO_ROOT/vendor/libav"
 #
 # These propagate to ffmpeg's --optflags AND to all dependency library
 # CFLAGS via the Makefile, AND to the final emcc link step. Override at
-# invocation time with `UBMP_LIBAV_OPTFLAGS=...`.
-LIBAV_OPTFLAGS="${UBMP_LIBAV_OPTFLAGS:--O3 -msimd128}"
+# invocation time with `AVBRIDGE_LIBAV_OPTFLAGS=...`.
+LIBAV_OPTFLAGS="${AVBRIDGE_LIBAV_OPTFLAGS:--O3 -msimd128}"
 
 # The fragment list. See libav.js docs/CONFIG.md and configs/mkconfigs.js for
 # the full grammar. Anything you add here gets compiled into the binary; the
@@ -104,8 +104,8 @@ log "cache directory: $CACHE"
 log "vendor target:   $VENDOR_DIR"
 mkdir -p "$CACHE" "$VENDOR_DIR"
 
-if [ "${UBMP_LIBAV_CLEAN:-0}" = "1" ]; then
-  log "UBMP_LIBAV_CLEAN=1 — wiping cached emsdk + libav.js trees"
+if [ "${AVBRIDGE_LIBAV_CLEAN:-0}" = "1" ]; then
+  log "AVBRIDGE_LIBAV_CLEAN=1 — wiping cached emsdk + libav.js trees"
   rm -rf "$EMSDK_DIR" "$LIBAV_DIR"
 fi
 
@@ -157,7 +157,7 @@ log "writing variant config 'configs/configs/$VARIANT_NAME'"
 #     a partial clean rebuild if so. Make can't see OPTFLAGS as a dependency,
 #     so without this an old build with -Oz objects would silently survive.
 # ─────────────────────────────────────────────────────────────────────────────
-INPUT_HASH_FILE="$LIBAV_DIR/.ubmp-build-inputs"
+INPUT_HASH_FILE="$LIBAV_DIR/.avbridge-build-inputs"
 INPUTS_NOW=$(printf "%s\n%s\n" "$VARIANT_FRAGMENTS" "$LIBAV_OPTFLAGS")
 INPUTS_NOW_HASH=$(printf "%s" "$INPUTS_NOW" | shasum -a 256 | cut -d' ' -f1)
 INPUTS_PREV_HASH=""
@@ -234,8 +234,8 @@ ls -lh "$VENDOR_DIR" | sed 's/^/[build-libav]   /'
 
 log ""
 log "Next steps:"
-log "  1. Run \`npm run predemo\` to copy the variant into demo/public/libav/ubmp/"
+log "  1. Run \`npm run predemo\` to copy the variant into demo/public/libav/avbridge/"
 log "  2. Run \`npm run demo\` and try a legacy file"
 log ""
 log "The loader at src/strategies/fallback/libav-loader.ts will pick up the"
-log "ubmp variant automatically — see the 'ubmp' branch in loadVariant()."
+log "avbridge variant automatically — see the 'avbridge' branch in loadVariant()."

@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 /**
- * Headless playback smoke-tester for UBMP.
+ * Headless playback smoke-tester for avbridge.
  *
- * Launches a headless Chromium via Puppeteer, opens the UBMP demo, feeds
+ * Launches a headless Chromium via Puppeteer, opens the avbridge demo, feeds
  * each file from the command line (or a directory glob), plays for N seconds,
  * and reports probe/classification/strategy/runtime diagnostics + pass/fail.
  *
@@ -175,7 +175,7 @@ async function testFile(browser, filePath) {
             resolve({ status: "error", message: errText });
             return;
           }
-          if (["native", "remux", "fallback"].some((s) => text.includes(s)) && !text.includes("buffering")) {
+          if (["native", "remux", "hybrid", "fallback"].some((s) => text.includes(s)) && !text.includes("buffering")) {
             resolve({ status: "ready", strategy: text.trim() });
             return;
           }
@@ -218,15 +218,33 @@ async function testFile(browser, filePath) {
     );
     const playedSec = parseTimeLabel(timeText);
 
-    // Determine pass/fail
-    const hasFrames = framesPainted > 0 || diag.strategy === "native";
-    const hasAudio = (rt.framesScheduled ?? 0) > 0 || diag.strategy === "native";
+    // Determine pass/fail. native + remux both render through the <video>
+    // element, so framesPainted (a canvas-only metric) is 0 for them — we
+    // verify playback by reading the video's readyState/currentTime. The
+    // demo now uses <avbridge-player>, which exposes these as element
+    // properties (and also keeps a real <video> in its shadow root).
+    const usesNativeVideo = diag.strategy === "native" || diag.strategy === "remux";
+    const videoState = await page.evaluate(() => {
+      const el = document.getElementById("player");
+      if (el && "readyState" in el && "currentTime" in el) {
+        return {
+          readyState: el.readyState,
+          currentTime: el.currentTime,
+        };
+      }
+      // Fallback for older demo layouts.
+      const v = document.getElementById("video");
+      return { readyState: v?.readyState ?? 0, currentTime: v?.currentTime ?? 0 };
+    });
+    const hasFrames = usesNativeVideo
+      ? videoState.readyState >= 2 && videoState.currentTime > 0.1
+      : framesPainted > 0;
     const pass = hasFrames && playedSec > 1;
 
     return {
       file: name,
       status: pass ? "PASS" : "FAIL",
-      error: pass ? undefined : `no frames painted (decoded=${framesDecoded}, painted=${framesPainted})`,
+      error: pass ? undefined : `playback did not advance (strategy=${diag.strategy}, painted=${framesPainted}, readyState=${videoState.readyState}, currentTime=${videoState.currentTime.toFixed(2)})`,
       strategy: diag.strategy,
       container: diag.container,
       videoCodec: diag.videoCodec,

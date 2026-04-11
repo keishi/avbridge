@@ -37,7 +37,8 @@ export interface DecoderHandles {
 }
 
 export interface StartDecoderOptions {
-  blob: Blob;
+  /** Normalized source — either a Blob in memory or a URL we'll stream via Range requests. */
+  source: import("../../util/source.js").NormalizedSource;
   filename: string;
   context: MediaContext;
   renderer: VideoRenderer;
@@ -49,7 +50,11 @@ export async function startDecoder(opts: StartDecoderOptions): Promise<DecoderHa
   const libav = (await loadLibav(variant)) as unknown as LibavRuntime;
   const bridge = await loadBridge();
 
-  await libav.mkreadaheadfile(opts.filename, opts.blob);
+  // For URL sources, prepareLibavInput attaches an HTTP block reader so
+  // libav demuxes via Range requests. For Blob sources, it falls back to
+  // mkreadaheadfile (in-memory). The returned handle owns cleanup.
+  const { prepareLibavInput } = await import("../../util/libav-http-reader.js");
+  const inputHandle = await prepareLibavInput(libav as unknown as Parameters<typeof prepareLibavInput>[0], opts.filename, opts.source);
 
   // Pre-allocate one AVPacket for ff_read_frame_multi to reuse.
   const readPkt = await libav.av_packet_alloc();
@@ -78,7 +83,7 @@ export async function startDecoder(opts: StartDecoderOptions): Promise<DecoderHa
         videoTimeBase = [videoStream.time_base_num, videoStream.time_base_den];
       }
     } catch (err) {
-      console.error("[ubmp] failed to init video decoder:", err);
+      console.error("[avbridge] failed to init video decoder:", err);
     }
   }
 
@@ -92,13 +97,33 @@ export async function startDecoder(opts: StartDecoderOptions): Promise<DecoderHa
         audioTimeBase = [audioStream.time_base_num, audioStream.time_base_den];
       }
     } catch (err) {
-      console.error("[ubmp] failed to init audio decoder:", err);
+      console.warn(
+        "[avbridge] fallback: audio decoder unavailable — playing video with wall-clock timing:",
+        (err as Error).message,
+      );
     }
   }
 
+  // No audio decoder? Switch audio output into wall-clock mode so video can
+  // play even when the audio codec isn't supported by the loaded libav variant.
+  if (!audioDec) {
+    opts.audio.setNoAudio();
+  }
+
   if (!videoDec && !audioDec) {
-    await libav.unlinkreadaheadfile(opts.filename).catch(() => {});
-    throw new Error("fallback decoder: could not initialize any libav decoders for this file");
+    await inputHandle.detach().catch(() => {});
+    const codecs = [
+      videoStream ? `video: ${opts.context.videoTracks[0]?.codec ?? "unknown"}` : null,
+      audioStream ? `audio: ${opts.context.audioTracks[0]?.codec ?? "unknown"}` : null,
+    ].filter(Boolean).join(", ");
+    const hint = variant === "webcodecs"
+      ? ` The "${variant}" libav variant does not include software decoders for these codecs. ` +
+        `Try the custom "avbridge" variant (scripts/build-libav.sh) for broader codec support, ` +
+        `or use a lighter strategy (native, remux, hybrid) instead.`
+      : "";
+    throw new Error(
+      `fallback decoder: could not initialize any libav decoders (${codecs}).${hint}`,
+    );
   }
 
   // ── Mutable state shared across pump loops ───────────────────────────
@@ -133,7 +158,7 @@ export async function startDecoder(opts: StartDecoderOptions): Promise<DecoderHa
           limit: 16 * 1024,
         });
       } catch (err) {
-        console.error("[ubmp] ff_read_frame_multi failed:", err);
+        console.error("[avbridge] ff_read_frame_multi failed:", err);
         return;
       }
 
@@ -174,7 +199,7 @@ export async function startDecoder(opts: StartDecoderOptions): Promise<DecoderHa
         return;
       }
       if (readErr && readErr !== 0 && readErr !== -libav.EAGAIN) {
-        console.warn("[ubmp] ff_read_frame_multi returned", readErr);
+        console.warn("[avbridge] ff_read_frame_multi returned", readErr);
         return;
       }
     }
@@ -192,7 +217,7 @@ export async function startDecoder(opts: StartDecoderOptions): Promise<DecoderHa
         flush ? { fin: true, ignoreErrors: true } : { ignoreErrors: true },
       );
     } catch (err) {
-      console.error("[ubmp] video decode batch failed:", err);
+      console.error("[avbridge] video decode batch failed:", err);
       return;
     }
     if (myToken !== pumpToken || destroyed) return;
@@ -214,7 +239,7 @@ export async function startDecoder(opts: StartDecoderOptions): Promise<DecoderHa
         videoFramesDecoded++;
       } catch (err) {
         if (videoFramesDecoded === 0) {
-          console.warn("[ubmp] laFrameToVideoFrame failed:", err);
+          console.warn("[avbridge] laFrameToVideoFrame failed:", err);
         }
       }
     }
@@ -232,7 +257,7 @@ export async function startDecoder(opts: StartDecoderOptions): Promise<DecoderHa
         flush ? { fin: true, ignoreErrors: true } : { ignoreErrors: true },
       );
     } catch (err) {
-      console.error("[ubmp] audio decode batch failed:", err);
+      console.error("[avbridge] audio decode batch failed:", err);
       return;
     }
     if (myToken !== pumpToken || destroyed) return;
@@ -261,7 +286,7 @@ export async function startDecoder(opts: StartDecoderOptions): Promise<DecoderHa
   // Kick off the initial pump.
   pumpToken = 1;
   pumpRunning = pumpLoop(pumpToken).catch((err) =>
-    console.error("[ubmp] decoder pump failed:", err),
+    console.error("[avbridge] decoder pump failed:", err),
   );
 
   return {
@@ -273,7 +298,7 @@ export async function startDecoder(opts: StartDecoderOptions): Promise<DecoderHa
       try { if (audioDec) await libav.ff_free_decoder?.(audioDec.c, audioDec.pkt, audioDec.frame); } catch { /* ignore */ }
       try { await libav.av_packet_free?.(readPkt); } catch { /* ignore */ }
       try { await libav.avformat_close_input_js(fmt_ctx); } catch { /* ignore */ }
-      try { await libav.unlinkreadaheadfile(opts.filename); } catch { /* ignore */ }
+      try { await inputHandle.detach(); } catch { /* ignore */ }
     },
 
     async seek(timeSec) {
@@ -306,7 +331,7 @@ export async function startDecoder(opts: StartDecoderOptions): Promise<DecoderHa
           libav.AVSEEK_FLAG_BACKWARD ?? 0,
         );
       } catch (err) {
-        console.warn("[ubmp] av_seek_frame failed:", err);
+        console.warn("[avbridge] av_seek_frame failed:", err);
       }
 
       // Reset the decoder state. After the previous pump exited via the
@@ -333,7 +358,7 @@ export async function startDecoder(opts: StartDecoderOptions): Promise<DecoderHa
 
       // Start a fresh pump for the new token.
       pumpRunning = pumpLoop(newToken).catch((err) =>
-        console.error("[ubmp] decoder pump failed (post-seek):", err),
+        console.error("[avbridge] decoder pump failed (post-seek):", err),
       );
     },
 
@@ -479,9 +504,9 @@ function libavFrameToInterleavedFloat32(frame: LibavFrame): InterleavedSamples |
       return { data: out, channels, sampleRate };
     }
     default:
-      if (!(globalThis as { __ubmpLoggedSampleFmt?: number }).__ubmpLoggedSampleFmt) {
-        (globalThis as { __ubmpLoggedSampleFmt?: number }).__ubmpLoggedSampleFmt = frame.format;
-        console.warn(`[ubmp] unsupported audio sample format from libav: ${frame.format}`);
+      if (!(globalThis as { __avbridgeLoggedSampleFmt?: number }).__avbridgeLoggedSampleFmt) {
+        (globalThis as { __avbridgeLoggedSampleFmt?: number }).__avbridgeLoggedSampleFmt = frame.format;
+        console.warn(`[avbridge] unsupported audio sample format from libav: ${frame.format}`);
       }
       return null;
   }

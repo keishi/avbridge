@@ -68,6 +68,35 @@ export class MseSink {
   private pump(): void {
     const sb = this.sourceBuffer;
     if (!sb || sb.updating) return;
+
+    // Apply deferred actions once the SourceBuffer has any data. Deferred
+    // seek and deferred autoplay are independent — both can fire here, or
+    // either alone. Setting `currentTime` before data exists causes the
+    // browser to snap back to the nearest buffered range; calling `play()`
+    // before data exists puts the video into a stuck waiting state.
+    if (sb.buffered.length > 0) {
+      if (this.pendingSeekTime !== null) {
+        this.options.video.currentTime = this.pendingSeekTime;
+        this.pendingSeekTime = null;
+      } else if (!this.hasSnappedToFirstBuffered) {
+        // First data arrival with no pending seek. If currentTime is
+        // outside the first buffered range (typical for MPEG-TS sources
+        // whose PTS doesn't start at 0), snap into the buffered range
+        // so the video element doesn't wait forever for nonexistent data.
+        const v = this.options.video;
+        const firstStart = sb.buffered.start(0);
+        const firstEnd = sb.buffered.end(0);
+        if (v.currentTime < firstStart || v.currentTime > firstEnd) {
+          v.currentTime = firstStart;
+        }
+        this.hasSnappedToFirstBuffered = true;
+      }
+      if (this.playOnSeek) {
+        this.playOnSeek = false;
+        this.options.video.play().catch(() => { /* ignore — autoplay may be blocked */ });
+      }
+    }
+
     const next = this.queue.shift();
     if (!next) return;
     try {
@@ -123,17 +152,72 @@ export class MseSink {
     tryEnd();
   }
 
-  /** Discard buffered media around a seek target so re-pumping can resume. */
+  /** Seconds of media buffered ahead of the current playback position. */
+  bufferedAhead(): number {
+    const sb = this.sourceBuffer;
+    if (!sb || sb.buffered.length === 0) return 0;
+    const current = this.options.video.currentTime;
+    for (let i = 0; i < sb.buffered.length; i++) {
+      if (sb.buffered.start(i) <= current && sb.buffered.end(i) > current) {
+        return sb.buffered.end(i) - current;
+      }
+    }
+    return 0;
+  }
+
+  /** Total seconds of media buffered across all ranges. */
+  totalBuffered(): number {
+    const sb = this.sourceBuffer;
+    if (!sb || sb.buffered.length === 0) return 0;
+    let total = 0;
+    for (let i = 0; i < sb.buffered.length; i++) {
+      total += sb.buffered.end(i) - sb.buffered.start(i);
+    }
+    return total;
+  }
+
+  /** Number of chunks waiting in the append queue. */
+  queueLength(): number {
+    return this.queue.length;
+  }
+
+  /** Time to seek to once the SourceBuffer has data at this position. */
+  private pendingSeekTime: number | null = null;
+  /** Whether to resume playback after the deferred seek completes. */
+  private playOnSeek = false;
+  /**
+   * On the very first data arrival, if `currentTime` falls outside the first
+   * buffered range, snap it to the start of that range. MPEG-TS sources
+   * commonly start their PTS at a non-zero value (e.g. ~1.5s); without this
+   * snap, the video element sits at `currentTime=0` waiting forever for
+   * data that doesn't exist.
+   */
+  private hasSnappedToFirstBuffered = false;
+
+  /** Request that playback resumes automatically once the deferred seek fires. */
+  setPlayOnSeek(play: boolean): void {
+    this.playOnSeek = play;
+  }
+
+  /**
+   * Discard all buffered media and schedule a deferred seek. The actual
+   * `video.currentTime` assignment happens in `pump()` once the SourceBuffer
+   * has data at the target position — setting it earlier causes the browser
+   * to snap back to the nearest buffered range.
+   */
   invalidate(seekTime: number): void {
     const sb = this.sourceBuffer;
+    // Clear the pending queue — stale fragments from the old pump position.
+    this.queue = [];
+    this.pendingSeekTime = seekTime;
+    this.hasSnappedToFirstBuffered = true; // explicit seek overrides the auto-snap
     if (!sb || sb.buffered.length === 0) return;
     try {
+      const start = sb.buffered.start(0);
       const end = sb.buffered.end(sb.buffered.length - 1);
-      if (end > seekTime + 0.1) {
-        sb.remove(seekTime, end);
-      }
+      sb.remove(start, end);
     } catch {
-      /* ignore — sourcebuffer in updating state */
+      /* ignore — sourcebuffer may be in updating state */
     }
   }
 

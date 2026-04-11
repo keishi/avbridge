@@ -29,7 +29,7 @@ export class TypedEmitter<EventMap> {
         fn(this.sticky[event] as EventMap[K]);
       } catch (err) {
         // eslint-disable-next-line no-console
-        console.error("[ubmp] listener threw replaying sticky value:", err);
+        console.error("[avbridge] listener threw replaying sticky value:", err);
       }
     }
 
@@ -50,7 +50,7 @@ export class TypedEmitter<EventMap> {
       } catch (err) {
         // Don't let one bad listener break the others.
         // eslint-disable-next-line no-console
-        console.error("[ubmp] listener threw:", err);
+        console.error("[avbridge] listener threw:", err);
       }
     }
   }

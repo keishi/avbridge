@@ -6,6 +6,9 @@ dist
 coverage
 demo/public/libav
 
+# Local Claude Code config (per-developer permission whitelist)
+.claude/
+
 # Vendored libav.js binaries — large, built locally via scripts/build-libav.sh
 # Uncomment the next line to track them in git (e.g. for CI without Emscripten)
 # !vendor/libav/*.wasm

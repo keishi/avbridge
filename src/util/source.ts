@@ -1,60 +1,192 @@
-import type { ContainerKind, MediaSource_ } from "../types.js";
+import type { ContainerKind, MediaInput } from "../types.js";
 
 /**
- * Normalize a `MediaSource_` into a `Blob` for the probe layer. URLs are
- * fetched lazily — we only fetch enough bytes to sniff the magic header for
- * container detection, and the strategies receive the original source so they
- * can stream from it.
+ * Bytes needed by the sniffer to identify every container we recognize.
+ * MPEG-TS needs the most: a sync byte at offset 0 *and* offset 188 (one TS
+ * packet apart). Allow a little extra for the M2TS variant (offset 4/192).
  */
-export interface NormalizedSource {
-  blob: Blob;
-  name?: string;
-  byteLength: number;
-  /** Original input, preserved for strategies that prefer File objects (eg. native <video src>). */
-  original: MediaSource_;
+const SNIFF_BYTES_NEEDED = 380;
+
+/**
+ * Bytes to fetch from a URL during the initial sniff. We grab a slightly
+ * larger range than `SNIFF_BYTES_NEEDED` so the cache has some headroom for
+ * the demuxer's first read after sniffing, in case it wants to look at
+ * a few extra bytes (e.g. mp4 ftyp + first moov box).
+ */
+const URL_SNIFF_RANGE_BYTES = 32 * 1024;
+
+/**
+ * `NormalizedSource` is a discriminated union: every consumer (probe,
+ * strategies) decides what to do based on `kind`. URL sources are NOT
+ * fetched eagerly; we only do a Range request for the first ~32 KB so the
+ * sniffer has bytes to look at. The strategies are then handed the URL
+ * directly so they can stream the rest via Range requests.
+ *
+ * For File / Blob / ArrayBuffer / Uint8Array sources, the bytes are
+ * already in memory, so we wrap them as a `blob` variant.
+ */
+export type NormalizedSource =
+  | {
+      kind: "blob";
+      blob: Blob;
+      name?: string;
+      byteLength: number;
+      original: MediaInput;
+    }
+  | {
+      kind: "url";
+      url: string;
+      /** Bytes pulled via Range request for the sniffer. NOT the full file. */
+      sniffBytes: Uint8Array;
+      name?: string;
+      /** Total file size from Content-Length / Content-Range. May be undefined. */
+      byteLength: number | undefined;
+      original: MediaInput;
+    };
+
+/** True if this source carries the entire file's bytes (vs. streaming). */
+export function isInMemorySource(source: NormalizedSource): source is Extract<NormalizedSource, { kind: "blob" }> {
+  return source.kind === "blob";
 }
 
-export async function normalizeSource(source: MediaSource_): Promise<NormalizedSource> {
+
+/**
+ * Normalize a `MediaInput` for the probe + strategy layers. **Does not**
+ * download URL sources in full — only fetches the first ~32 KB via a
+ * Range request, which is enough for the sniffer to identify the
+ * container. The strategies are then expected to stream the rest via
+ * mediabunny's `UrlSource` (Range requests, prefetch, parallelism, cache).
+ *
+ * For non-URL inputs, the bytes are already in memory and we just wrap them.
+ */
+export async function normalizeSource(source: MediaInput): Promise<NormalizedSource> {
   if (source instanceof File) {
-    return { blob: source, name: source.name, byteLength: source.size, original: source };
+    return {
+      kind: "blob",
+      blob: source,
+      name: source.name,
+      byteLength: source.size,
+      original: source,
+    };
   }
   if (source instanceof Blob) {
-    return { blob: source, byteLength: source.size, original: source };
+    return { kind: "blob", blob: source, byteLength: source.size, original: source };
   }
   if (source instanceof ArrayBuffer) {
     const blob = new Blob([source]);
-    return { blob, byteLength: blob.size, original: source };
+    return { kind: "blob", blob, byteLength: blob.size, original: source };
   }
   if (source instanceof Uint8Array) {
     const blob = new Blob([source as BlobPart]);
-    return { blob, byteLength: blob.size, original: source };
+    return { kind: "blob", blob, byteLength: blob.size, original: source };
   }
   if (typeof source === "string" || source instanceof URL) {
     const url = source instanceof URL ? source.toString() : source;
-    const res = await fetch(url);
-    if (!res.ok) {
-      throw new Error(`failed to fetch source: ${res.status} ${res.statusText}`);
-    }
-    const blob = await res.blob();
-    return {
-      blob,
-      name: url.split("/").pop() ?? undefined,
-      byteLength: blob.size,
-      original: source,
-    };
+    return await fetchUrlForSniff(url, source);
   }
   throw new TypeError("unsupported source type");
 }
 
 /**
- * Sniff the first ~32 bytes of a Blob to identify the container family. This
- * is the cheap path — it lets us route MP4/MKV/WebM directly to mediabunny
- * without ever loading libav.js, and lets us detect AVI to opt into the libav
- * probe path. Sniffing intentionally does not trust file extensions.
+ * Fetch the first ~32 KB of a URL via a Range request. Falls back to a
+ * full GET if the server doesn't support range requests, but in that case
+ * we only read the first 32 KB and abort the rest of the response so we
+ * don't accidentally buffer a large file.
  */
-export async function sniffContainer(blob: Blob): Promise<ContainerKind> {
-  const buf = await readBlobBytes(blob, 32);
-  const head = new Uint8Array(buf);
+async function fetchUrlForSniff(url: string, originalSource: MediaInput): Promise<NormalizedSource> {
+  const name = url.split("/").pop()?.split("?")[0] ?? undefined;
+
+  // First attempt: Range request for the sniff window.
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      headers: { Range: `bytes=0-${URL_SNIFF_RANGE_BYTES - 1}` },
+    });
+  } catch (err) {
+    throw new Error(`failed to fetch source ${url}: ${(err as Error).message}`);
+  }
+  if (!res.ok && res.status !== 206) {
+    throw new Error(`failed to fetch source ${url}: ${res.status} ${res.statusText}`);
+  }
+
+  // Determine the total file size from Content-Range (preferred) or Content-Length.
+  let byteLength: number | undefined;
+  const contentRange = res.headers.get("content-range");
+  if (contentRange) {
+    // "bytes 0-32767/12345678" — parse the part after the slash
+    const m = contentRange.match(/\/(\d+)$/);
+    if (m) byteLength = parseInt(m[1], 10);
+  }
+  if (byteLength === undefined) {
+    const cl = res.headers.get("content-length");
+    if (cl) {
+      const n = parseInt(cl, 10);
+      if (Number.isFinite(n)) {
+        // If the server returned 200 (full body), Content-Length is the
+        // FILE size. If 206 (partial), it's the chunk size — only use it
+        // as a total if no Content-Range was present (server doesn't do
+        // ranges) AND the full response is smaller than our sniff window.
+        if (res.status === 200) byteLength = n;
+        else if (res.status === 206 && !contentRange) byteLength = n;
+      }
+    }
+  }
+
+  // Read the sniff bytes. If the server ignored the Range header and is
+  // streaming the full file, only read the first window and let the rest
+  // be GC'd. We use a reader so we can stop early.
+  const reader = res.body?.getReader();
+  if (!reader) {
+    // No streamed body (some test environments). Fall back to .arrayBuffer()
+    // and slice — this might pull more than we wanted, but only for the
+    // initial sniff, not the full file.
+    const buf = new Uint8Array(await res.arrayBuffer());
+    const sniffBytes = buf.slice(0, URL_SNIFF_RANGE_BYTES);
+    return { kind: "url", url, sniffBytes, name, byteLength, original: originalSource };
+  }
+
+  const chunks: Uint8Array[] = [];
+  let collected = 0;
+  while (collected < URL_SNIFF_RANGE_BYTES) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+    collected += value.byteLength;
+  }
+  // Cancel the response so we don't keep downloading.
+  await reader.cancel().catch(() => { /* ignore */ });
+
+  // Concatenate up to URL_SNIFF_RANGE_BYTES.
+  const total = Math.min(collected, URL_SNIFF_RANGE_BYTES);
+  const sniffBytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    if (offset >= total) break;
+    const room = total - offset;
+    sniffBytes.set(chunk.subarray(0, Math.min(chunk.byteLength, room)), offset);
+    offset += chunk.byteLength;
+  }
+
+  return { kind: "url", url, sniffBytes, name, byteLength, original: originalSource };
+}
+
+/**
+ * Identify the container family from a small byte buffer. Used by the
+ * probe layer for both file (Blob → first 380 bytes) and URL (Range
+ * request → first 32 KB) inputs.
+ *
+ * Sniffing intentionally does not trust file extensions.
+ */
+export function sniffContainerFromBytes(head: Uint8Array): ContainerKind {
+  // MPEG-TS: sync byte 0x47 every 188 bytes. Verify at least two sync
+  // bytes in the right places to avoid false positives. Some captures
+  // start with a few junk bytes — also try offsets 4 and 192 (M2TS).
+  if (head.length >= 376 && head[0] === 0x47 && head[188] === 0x47) {
+    return "mpegts";
+  }
+  if (head.length >= 380 && head[4] === 0x47 && head[192] === 0x47) {
+    return "mpegts"; // M2TS — 4-byte timestamp prefix per packet
+  }
   // RIFF....AVI  →  AVI
   if (
     head[0] === 0x52 && head[1] === 0x49 && head[2] === 0x46 && head[3] === 0x46 &&
@@ -96,6 +228,28 @@ export async function sniffContainer(blob: Blob): Promise<ContainerKind> {
     return "mp3";
   }
   return "unknown";
+}
+
+/**
+ * Convenience: sniff a `NormalizedSource` regardless of kind. For URL
+ * sources, uses the pre-fetched `sniffBytes`. For blob sources, reads the
+ * first 380 bytes.
+ */
+export async function sniffNormalizedSource(source: NormalizedSource): Promise<ContainerKind> {
+  if (source.kind === "url") {
+    return sniffContainerFromBytes(source.sniffBytes);
+  }
+  const buf = await readBlobBytes(source.blob, SNIFF_BYTES_NEEDED);
+  return sniffContainerFromBytes(new Uint8Array(buf));
+}
+
+/**
+ * Backwards-compatible wrapper for code that still passes a Blob directly.
+ * Prefer `sniffNormalizedSource` going forward.
+ */
+export async function sniffContainer(blob: Blob): Promise<ContainerKind> {
+  const buf = await readBlobBytes(blob, SNIFF_BYTES_NEEDED);
+  return sniffContainerFromBytes(new Uint8Array(buf));
 }
 
 /**
