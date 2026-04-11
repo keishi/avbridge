@@ -1,20 +1,20 @@
 import { describe, it, expect, beforeAll } from "vitest";
-import { AvbridgePlayerElement } from "../src/element/avbridge-player.js";
+import { AvbridgeVideoElement } from "../src/element/avbridge-video.js";
 
 // Register the element once for all tests in this file. We import the class
 // directly (rather than the side-effecting `src/element.ts` entry) so we can
 // also exercise the double-registration guard explicitly below.
 beforeAll(() => {
-  if (!customElements.get("avbridge-player")) {
-    customElements.define("avbridge-player", AvbridgePlayerElement);
+  if (!customElements.get("avbridge-video")) {
+    customElements.define("avbridge-video", AvbridgeVideoElement);
   }
 });
 
-function createElement(): AvbridgePlayerElement {
-  return document.createElement("avbridge-player") as AvbridgePlayerElement;
+function createElement(): AvbridgeVideoElement {
+  return document.createElement("avbridge-video") as AvbridgeVideoElement;
 }
 
-describe("avbridge-player — construction", () => {
+describe("avbridge-video — construction", () => {
   it("attaches a shadow root containing a <video part='video'>", () => {
     const el = createElement();
     expect(el.shadowRoot).not.toBeNull();
@@ -45,7 +45,7 @@ describe("avbridge-player — construction", () => {
   });
 });
 
-describe("avbridge-player — attribute / property reflection", () => {
+describe("avbridge-video — attribute / property reflection", () => {
   it("src property reflects to attribute", () => {
     const el = createElement();
     el.src = "https://example.com/movie.mp4";
@@ -112,7 +112,7 @@ describe("avbridge-player — attribute / property reflection", () => {
   });
 });
 
-describe("avbridge-player — source mutual exclusion", () => {
+describe("avbridge-video — source mutual exclusion", () => {
   it("setting source clears src", () => {
     const el = createElement();
     el.src = "a.mp4";
@@ -140,7 +140,7 @@ describe("avbridge-player — source mutual exclusion", () => {
   });
 });
 
-describe("avbridge-player — pending operations before bootstrap", () => {
+describe("avbridge-video — pending operations before bootstrap", () => {
   it("currentTime assignment before player exists is queued", () => {
     const el = createElement();
     // Reading currentTime returns 0 with no player.
@@ -162,7 +162,7 @@ describe("avbridge-player — pending operations before bootstrap", () => {
   });
 });
 
-describe("avbridge-player — destroy semantics", () => {
+describe("avbridge-video — destroy semantics", () => {
   it("destroy() is idempotent", async () => {
     const el = createElement();
     await el.destroy();
@@ -179,7 +179,7 @@ describe("avbridge-player — destroy semantics", () => {
   });
 });
 
-describe("avbridge-player — HTMLMediaElement parity surface", () => {
+describe("avbridge-video — HTMLMediaElement parity surface", () => {
   it("exposes the underlying <video> via videoElement", () => {
     const el = createElement();
     const v = el.videoElement;
@@ -256,7 +256,7 @@ describe("avbridge-player — HTMLMediaElement parity surface", () => {
   });
 });
 
-describe("avbridge-player — event forwarding", () => {
+describe("avbridge-video — event forwarding", () => {
   it("forwards loadedmetadata from the inner video to the wrapper", () => {
     const el = createElement();
     let count = 0;
@@ -295,7 +295,7 @@ describe("avbridge-player — event forwarding", () => {
   });
 });
 
-describe("avbridge-player — light-DOM <track> children", () => {
+describe("avbridge-video — light-DOM <track> children", () => {
   it("clones <track> children appended before connect", () => {
     // Append the track BEFORE connection — covers the
     //   el.src = "..."; el.appendChild(track);  (pre-bootstrap)
@@ -362,15 +362,15 @@ describe("avbridge-player — light-DOM <track> children", () => {
   });
 });
 
-describe("avbridge-player — double registration guard", () => {
+describe("avbridge-video — double registration guard", () => {
   it("re-importing the side-effecting entry does not throw", async () => {
     // The src/element.ts entry guards against double registration. We
     // simulate that import here by checking the current registration is
     // intact and re-running the guard.
-    expect(customElements.get("avbridge-player")).toBe(AvbridgePlayerElement);
+    expect(customElements.get("avbridge-video")).toBe(AvbridgeVideoElement);
     expect(() => {
-      if (!customElements.get("avbridge-player")) {
-        customElements.define("avbridge-player", AvbridgePlayerElement);
+      if (!customElements.get("avbridge-video")) {
+        customElements.define("avbridge-video", AvbridgeVideoElement);
       }
     }).not.toThrow();
   });

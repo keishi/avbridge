@@ -368,6 +368,12 @@ export async function startDecoder(opts: StartDecoderOptions): Promise<DecoderHa
         packetsRead,
         videoFramesDecoded,
         audioFramesDecoded,
+        // Confirmed transport info: once prepareLibavInput returns
+        // successfully, we *know* whether the source is http-range (probe
+        // succeeded and returned 206) or in-memory blob. Diagnostics hoists
+        // these `_`-prefixed keys to the typed fields.
+        _transport: inputHandle.transport === "http-range" ? "http-range" : "memory",
+        _rangeSupported: inputHandle.transport === "http-range",
         ...opts.renderer.stats(),
         ...opts.audio.stats(),
       };

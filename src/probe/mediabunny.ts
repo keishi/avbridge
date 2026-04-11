@@ -138,7 +138,13 @@ export function mediabunnyVideoToAvbridge(c: string | null | undefined): VideoCo
     case "vp8":  return "vp8";
     case "vp9":  return "vp9";
     case "av1":  return "av1";
-    default:     return "h264";
+    default:
+      // Preserve the original codec string when mediabunny gave us something
+      // we don't recognize. The classifier checks `NATIVE_VIDEO_CODECS.has()`
+      // and routes anything outside that set through the fallback chain — so
+      // returning the unknown name (instead of silently relabeling it as
+      // "h264") gets correct routing AND honest diagnostics.
+      return c ? (c as VideoCodec) : "unknown";
   }
 }
 
@@ -163,7 +169,7 @@ export function mediabunnyAudioToAvbridge(c: string | null | undefined): AudioCo
     case "flac":   return "flac";
     case "ac3":    return "ac3";
     case "eac3":   return "eac3";
-    default:       return (c as AudioCodec) ?? "aac";
+    default:       return c ? (c as AudioCodec) : "unknown";
   }
 }
 

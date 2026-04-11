@@ -4,7 +4,7 @@ import { classify } from "./classify/index.js";
 import { Diagnostics } from "./diagnostics.js";
 import { PluginRegistry } from "./plugins/registry.js";
 import { registerBuiltins } from "./plugins/builtin.js";
-import { discoverSidecar, attachSubtitleTracks } from "./subtitles/index.js";
+import { discoverSidecars, attachSubtitleTracks, SubtitleResourceBag } from "./subtitles/index.js";
 import type {
   Classification,
   CreatePlayerOptions,
@@ -35,6 +35,10 @@ export class UnifiedPlayer {
 
   // Serializes escalation / setStrategy calls
   private switchingPromise: Promise<void> = Promise.resolve();
+
+  // Owns blob URLs created during sidecar discovery + SRT->VTT conversion.
+  // Revoked at destroy() so repeated source swaps don't leak.
+  private subtitleResources = new SubtitleResourceBag();
 
   /**
    * @internal Use {@link createPlayer} or {@link UnifiedPlayer.create} instead.
@@ -78,8 +82,11 @@ export class UnifiedPlayer {
         }
       }
       if (this.options.directory && this.options.source instanceof File) {
-        const found = await discoverSidecar(this.options.source, this.options.directory);
+        const found = await discoverSidecars(this.options.source, this.options.directory);
         for (const s of found) {
+          // Track every blob URL we adopted from discovery so it gets
+          // revoked at destroy() — otherwise repeated source changes leak.
+          this.subtitleResources.track(s.url);
           ctx.subtitleTracks.push({
             id: ctx.subtitleTracks.length,
             format: s.format,
@@ -89,12 +96,8 @@ export class UnifiedPlayer {
         }
       }
 
-      const decision = this.options.forceStrategy
-        ? {
-            class: "NATIVE" as const,
-            strategy: this.options.forceStrategy,
-            reason: `forced via options.forceStrategy=${this.options.forceStrategy}`,
-          }
+      const decision = this.options.initialStrategy
+        ? buildInitialDecision(this.options.initialStrategy, ctx)
         : classify(ctx);
       this.classification = decision;
       this.diag.recordClassification(decision);
@@ -107,9 +110,22 @@ export class UnifiedPlayer {
       // Try the primary strategy, falling through the chain on failure
       await this.startSession(decision.strategy, decision.reason);
 
-      // Apply subtitles for non-canvas strategies
+      // Apply subtitles for non-canvas strategies. Awaited so fetch/parse
+      // failures surface deterministically — but per-track failures are
+      // caught inside attachSubtitleTracks and logged via console.warn so
+      // a single bad sidecar doesn't break bootstrap. Subtitles are not
+      // load-bearing for playback. (Promoting this to a typed `subtitleerror`
+      // event is a nice-to-have follow-up.)
       if (this.session!.strategy !== "fallback" && this.session!.strategy !== "hybrid") {
-        attachSubtitleTracks(this.options.target, ctx.subtitleTracks);
+        await attachSubtitleTracks(
+          this.options.target,
+          ctx.subtitleTracks,
+          this.subtitleResources,
+          (err, track) => {
+            // eslint-disable-next-line no-console
+            console.warn(`[avbridge] subtitle ${track.id} failed: ${err.message}`);
+          },
+        );
       }
 
       this.emitter.emitSticky("tracks", {
@@ -200,57 +216,70 @@ export class UnifiedPlayer {
     const currentTime = this.session?.getCurrentTime() ?? 0;
     const wasPlaying = this.session ? !this.options.target.paused : false;
     const fromStrategy = this.session?.strategy ?? "native";
-    const nextStrategy = chain.shift()!;
 
-    console.warn(`[avbridge] escalating from ${fromStrategy} to ${nextStrategy}: ${reason}`);
-
-    this.emitter.emit("strategychange", {
-      from: fromStrategy,
-      to: nextStrategy,
-      reason,
-      currentTime,
-    });
-    this.diag.recordStrategySwitch(nextStrategy, reason);
-
-    // Tear down current session
+    // Tear down the current session before walking the chain — once we
+    // commit to escalating, the existing session is going away regardless
+    // of which fallback step succeeds.
     this.clearSupervisor();
     if (this.session) {
       try { await this.session.destroy(); } catch { /* ignore */ }
       this.session = null;
     }
 
-    // Create new session
-    const plugin = this.registry.findFor(this.mediaContext!, nextStrategy);
-    if (!plugin) {
-      this.emitter.emit("error", new Error(`no plugin for fallback strategy "${nextStrategy}"`));
+    // Walk every remaining entry in the chain. Previously this method
+    // popped exactly one entry and gave up if its plugin failed to start —
+    // a recoverable failure in one fallback step blocked later viable
+    // strategies (inconsistent with startSession() which already loops).
+    const errors: string[] = [];
+    while (chain.length > 0) {
+      const nextStrategy = chain.shift()!;
+      console.warn(`[avbridge] escalating from ${fromStrategy} to ${nextStrategy}: ${reason}`);
+
+      this.emitter.emit("strategychange", {
+        from: fromStrategy,
+        to: nextStrategy,
+        reason,
+        currentTime,
+      });
+      this.diag.recordStrategySwitch(nextStrategy, reason);
+
+      const plugin = this.registry.findFor(this.mediaContext!, nextStrategy);
+      if (!plugin) {
+        errors.push(`${nextStrategy}: no plugin available`);
+        continue;
+      }
+
+      try {
+        this.session = await plugin.execute(this.mediaContext!, this.options.target);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        errors.push(`${nextStrategy}: ${msg}`);
+        console.warn(`[avbridge] ${nextStrategy} failed during escalation, trying next: ${msg}`);
+        continue;
+      }
+
+      // Success — finish wiring and restore playback.
+      this.emitter.emitSticky("strategy", {
+        strategy: nextStrategy,
+        reason: `escalated: ${reason}`,
+      });
+      this.session.onFatalError?.((fatalReason) => {
+        void this.escalate(fatalReason);
+      });
+      this.attachSupervisor();
+      try {
+        await this.session.seek(currentTime);
+        if (wasPlaying) await this.session.play();
+      } catch (err) {
+        console.warn("[avbridge] failed to restore position after escalation:", err);
+      }
       return;
     }
 
-    try {
-      this.session = await plugin.execute(this.mediaContext!, this.options.target);
-    } catch (err) {
-      this.emitter.emit("error", err instanceof Error ? err : new Error(String(err)));
-      return;
-    }
-
-    this.emitter.emitSticky("strategy", {
-      strategy: nextStrategy,
-      reason: `escalated: ${reason}`,
-    });
-
-    // Wire up fatal error handler + supervisor for the new session
-    this.session.onFatalError?.((fatalReason) => {
-      void this.escalate(fatalReason);
-    });
-    this.attachSupervisor();
-
-    // Restore position and play state
-    try {
-      await this.session.seek(currentTime);
-      if (wasPlaying) await this.session.play();
-    } catch (err) {
-      console.warn("[avbridge] failed to restore position after escalation:", err);
-    }
+    // Chain exhausted with no working strategy.
+    this.emitter.emit("error", new Error(
+      `all fallback strategies failed: ${errors.join("; ")}`,
+    ));
   }
 
   // ── Stall supervision ─────────────────────────────────────────────────
@@ -446,10 +475,62 @@ export class UnifiedPlayer {
       await this.session.destroy();
       this.session = null;
     }
+    // Revoke every blob URL we created for sidecar discovery / SRT->VTT
+    // conversion. This is the cleanup leg of the leak fix.
+    this.subtitleResources.revokeAll();
     this.emitter.removeAll();
   }
 }
 
 export async function createPlayer(options: CreatePlayerOptions): Promise<UnifiedPlayer> {
   return UnifiedPlayer.create(options);
+}
+
+/**
+ * Build a synthetic classification when the consumer asked for a specific
+ * initial strategy. We ask `classify()` for the natural decision so we can
+ * inherit the correct fallback chain, then override the strategy + class.
+ *
+ * Why this matters: hard-coding `class: "NATIVE"` (the old behavior) made
+ * diagnostics lie for every initialStrategy that wasn't actually native, and
+ * any downstream logic that trusted `strategyClass` could make the wrong
+ * decision. We now derive the class from the picked strategy.
+ *
+ * @internal — exported for unit tests; not part of the public API.
+ */
+export function buildInitialDecision(
+  initial: StrategyName,
+  ctx: MediaContext,
+): Classification {
+  const natural = classify(ctx);
+  const cls = strategyToClass(initial, natural);
+  return {
+    class: cls,
+    strategy: initial,
+    reason: `initial strategy "${initial}" requested via options.initialStrategy`,
+    fallbackChain: natural.fallbackChain ?? defaultFallbackChain(initial),
+  };
+}
+
+function strategyToClass(
+  strategy: StrategyName,
+  natural: Classification,
+): Classification["class"] {
+  // If the natural classification picked the same strategy, use its class.
+  if (natural.strategy === strategy) return natural.class;
+  switch (strategy) {
+    case "native":   return "NATIVE";
+    case "remux":    return "REMUX_CANDIDATE";
+    case "hybrid":   return "HYBRID_CANDIDATE";
+    case "fallback": return "FALLBACK_REQUIRED";
+  }
+}
+
+function defaultFallbackChain(strategy: StrategyName): StrategyName[] {
+  switch (strategy) {
+    case "native":   return ["remux", "hybrid", "fallback"];
+    case "remux":    return ["hybrid", "fallback"];
+    case "hybrid":   return ["fallback"];
+    case "fallback": return [];
+  }
 }

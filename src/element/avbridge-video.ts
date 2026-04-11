@@ -1,19 +1,19 @@
 /**
- * `<avbridge-player>` — reference web component for the avbridge engine.
+ * `<avbridge-video>` — `HTMLMediaElement`-compatible primitive backed by the
+ * avbridge engine. Drop-in replacement for a `<video>` element with no
+ * built-in UI.
  *
- * This is a *thin* wrapper around `createPlayer()`. Its purpose is to:
+ * Purpose:
  *
- *   1. Validate the public API by being a real consumer of it.
+ *   1. Validate the public API by being a real consumer of `createPlayer()`.
  *   2. Drive lifecycle correctness in the core via adversarial integration tests.
- *   3. Provide a drop-in player for users who don't want to wire `createPlayer()`
- *      themselves.
+ *   3. Give consumers a `<video>`-compatible primitive they can wrap with
+ *      their own UI.
  *
- * It is **not** a player UI framework. See `docs/dev/WEB_COMPONENT_SPEC.md`
- * for the full spec, lifecycle invariants, and edge case list.
- *
- * Phase A scope (this file): lifecycle scaffold only — `src` / `source` /
- * `currentTime` / `play` / `pause` / `load` / `destroy` / events. No built-in
- * controls. Shadow DOM contains a single `<video part="video">`.
+ * **It is not a player UI framework.** The tag name `<avbridge-player>` is
+ * reserved for a future controls-bearing element. See
+ * `docs/dev/WEB_COMPONENT_SPEC.md` for the full spec, lifecycle invariants,
+ * and edge case list.
  */
 
 import { createPlayer, type UnifiedPlayer } from "../player.js";
@@ -96,7 +96,7 @@ const HTMLElementCtor: typeof HTMLElement =
  * single pattern handles disconnect-during-bootstrap, rapid src reassignment,
  * bootstrap races, and destroy-during-bootstrap.
  */
-export class AvbridgePlayerElement extends HTMLElementCtor {
+export class AvbridgeVideoElement extends HTMLElementCtor {
   static readonly observedAttributes = [
     "src",
     "autoplay",
@@ -147,7 +147,14 @@ export class AvbridgePlayerElement extends HTMLElementCtor {
   private _audioTracks: AudioTrackInfo[] = [];
   private _subtitleTracks: SubtitleTrackInfo[] = [];
 
-  /** Strategy preference (does not currently affect routing — reserved). */
+  /**
+   * Initial strategy preference. `"auto"` means "let the classifier decide";
+   * any other value is passed to `createPlayer({ initialStrategy })` and
+   * skips classification on the next bootstrap. Note that this only affects
+   * the *initial* pick — runtime fallback escalation still applies, so a
+   * preference of `"native"` may still escalate to remux/hybrid/fallback if
+   * native fails.
+   */
   private _preferredStrategy: PreferredStrategy = "auto";
 
   /** Set if currentTime was assigned before the player was ready. */
@@ -334,6 +341,12 @@ export class AvbridgePlayerElement extends HTMLElementCtor {
       player = await createPlayer({
         source,
         target: this._videoEl,
+        // Honor the consumer's preferred initial strategy. "auto" means
+        // "let the classifier decide" — the createPlayer call simply doesn't
+        // pass initialStrategy in that case.
+        ...(this._preferredStrategy !== "auto"
+          ? { initialStrategy: this._preferredStrategy }
+          : {}),
       });
     } catch (err) {
       // Stale or destroyed — silently abandon.
@@ -753,6 +766,6 @@ export class AvbridgePlayerElement extends HTMLElementCtor {
 
 declare global {
   interface HTMLElementTagNameMap {
-    "avbridge-player": AvbridgePlayerElement;
+    "avbridge-video": AvbridgeVideoElement;
   }
 }

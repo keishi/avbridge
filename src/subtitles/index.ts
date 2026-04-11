@@ -9,6 +9,11 @@ export { SubtitleOverlay } from "./render.js";
  * Discover sidecar `.srt` / `.vtt` files next to the source. Requires the
  * caller to pass a `FileSystemDirectoryHandle` (e.g. via the File System
  * Access API). Without that handle we can't enumerate sibling files.
+ *
+ * The returned `url` fields are blob URLs created via `URL.createObjectURL`.
+ * They must be revoked by the caller (e.g. via `revokeSubtitleResources()`)
+ * when the player tears down or the source changes — otherwise repeated
+ * source swaps in a single-page app will leak.
  */
 export interface DiscoveredSidecar {
   url: string;
@@ -16,7 +21,7 @@ export interface DiscoveredSidecar {
   language?: string;
 }
 
-export async function discoverSidecar(
+export async function discoverSidecars(
   file: File,
   directory: FileSystemDirectoryHandle,
 ): Promise<DiscoveredSidecar[]> {
@@ -49,13 +54,50 @@ export async function discoverSidecar(
 }
 
 /**
+ * Owns every blob URL created during sidecar discovery and SRT→VTT
+ * conversion for a single player session. Revoking the bag releases all of
+ * them in one shot at teardown.
+ */
+export class SubtitleResourceBag {
+  private urls = new Set<string>();
+
+  /** Track an externally-created blob URL (e.g. from `discoverSidecars`). */
+  track(url: string): void {
+    this.urls.add(url);
+  }
+
+  /** Convenience: create a blob URL and track it in one call. */
+  createObjectURL(blob: Blob): string {
+    const url = URL.createObjectURL(blob);
+    this.urls.add(url);
+    return url;
+  }
+
+  /** Revoke every tracked URL. Idempotent — safe to call multiple times. */
+  revokeAll(): void {
+    for (const u of this.urls) URL.revokeObjectURL(u);
+    this.urls.clear();
+  }
+}
+
+/**
  * Attach `<track>` elements for each subtitle to the player's `<video>`. SRT
  * sources are converted to VTT first via blob URLs because `<track>` only
  * accepts WebVTT.
+ *
+ * Pass a {@link SubtitleResourceBag} so the player can revoke the generated
+ * blob URLs at teardown. Without one, every SRT subtitle leaks a blob URL
+ * per attach.
+ *
+ * Errors during fetch/parse are caught per-track and reported via the
+ * `onError` callback (if provided) so a single bad subtitle doesn't break
+ * bootstrap. Subtitles are *not* load-bearing for playback.
  */
 export async function attachSubtitleTracks(
   video: HTMLVideoElement,
   tracks: SubtitleTrackInfo[],
+  bag?: SubtitleResourceBag,
+  onError?: (err: Error, track: SubtitleTrackInfo) => void,
 ): Promise<void> {
   // Clear existing dynamically-attached tracks.
   for (const t of Array.from(video.querySelectorAll("track[data-avbridge]"))) {
@@ -64,28 +106,33 @@ export async function attachSubtitleTracks(
 
   for (const t of tracks) {
     if (!t.sidecarUrl) continue;
-    let url = t.sidecarUrl;
-    if (t.format === "srt") {
-      const res = await fetch(t.sidecarUrl);
-      const text = await res.text();
-      const vtt = srtToVtt(text);
-      const blob = new Blob([vtt], { type: "text/vtt" });
-      url = URL.createObjectURL(blob);
-    } else if (t.format === "vtt") {
-      // Validate quickly so a malformed file fails loudly here.
-      const res = await fetch(t.sidecarUrl);
-      const text = await res.text();
-      if (!isVtt(text)) {
-        // eslint-disable-next-line no-console
-        console.warn("[avbridge] subtitle missing WEBVTT header:", t.sidecarUrl);
+    try {
+      let url = t.sidecarUrl;
+      if (t.format === "srt") {
+        const res = await fetch(t.sidecarUrl);
+        const text = await res.text();
+        const vtt = srtToVtt(text);
+        const blob = new Blob([vtt], { type: "text/vtt" });
+        url = bag ? bag.createObjectURL(blob) : URL.createObjectURL(blob);
+      } else if (t.format === "vtt") {
+        // Validate quickly so a malformed file fails loudly here.
+        const res = await fetch(t.sidecarUrl);
+        const text = await res.text();
+        if (!isVtt(text)) {
+          // eslint-disable-next-line no-console
+          console.warn("[avbridge] subtitle missing WEBVTT header:", t.sidecarUrl);
+        }
       }
+      const trackEl = document.createElement("track");
+      trackEl.kind = "subtitles";
+      trackEl.src = url;
+      trackEl.srclang = t.language ?? "und";
+      trackEl.label = t.language ?? `Subtitle ${t.id}`;
+      trackEl.dataset.avbridge = "true";
+      video.appendChild(trackEl);
+    } catch (err) {
+      const e = err instanceof Error ? err : new Error(String(err));
+      onError?.(e, t);
     }
-    const track = document.createElement("track");
-    track.kind = "subtitles";
-    track.src = url;
-    track.srclang = t.language ?? "und";
-    track.label = t.language ?? `Subtitle ${t.id}`;
-    track.dataset.avbridge = "true";
-    video.appendChild(track);
   }
 }

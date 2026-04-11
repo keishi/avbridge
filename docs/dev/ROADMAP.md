@@ -230,20 +230,24 @@ Two entry points:
 
 ---
 
-## Phase 4: `<avbridge-player>` reference component (quality harness) ✅
+## Phase 4: `<avbridge-video>` reference component (quality harness) ✅
+
+> **Note (2.0):** the element was originally shipped as `<avbridge-player>`
+> in 1.x. It was renamed to `<avbridge-video>` in 2.0 to free the
+> `<avbridge-player>` name for the future controls-bearing element.
 
 Built as a subpath export (`avbridge/element`) — see [`WEB_COMPONENT_SPEC.md`](./WEB_COMPONENT_SPEC.md).
 
 - [x] **Spec doc** with full API + lifecycle invariants + 25-case edge list
-- [x] **Element class** (`src/element/avbridge-player.ts`) with bootstrap token pattern enforcing all 5 lifecycle invariants
+- [x] **Element class** (`src/element/avbridge-video.ts`) with bootstrap token pattern enforcing all 5 lifecycle invariants
 - [x] **Subpath entry** (`src/element.ts`) with double-registration guard
 - [x] **tsup second entry + package.json `exports["./element"]`** with `sideEffects` array preserving the registration call
-- [x] **Strict entry isolation** verified by `core-no-element` bundle audit scenario — `customElements.define`, `"avbridge-player"`, and `AvbridgePlayerElement` are NOT in the core bundle
+- [x] **Strict entry isolation** verified by `core-no-element` bundle audit scenario — `customElements.define`, `"avbridge-video"`, and `AvbridgeVideoElement` are NOT in the core bundle
 - [x] **20 element unit tests** (jsdom): construction, attribute reflection, source mutual exclusion (caught a real reflection bug), pending operations, destroy idempotency
 - [x] **5/5 P0 lifecycle tests** (Puppeteer): #1 disconnect-during-bootstrap, #3 rapid src reassignment, #4 bootstrap race, #8 DOM move, #13 play-before-ready — all pass on first run
-- [x] **Demo player page migrated** to `<avbridge-player>` — surfaced one TS friction point (`addEventListener("error")` collides with the standard DOM `ErrorEvent` typing) which is the right kind of feedback for a quality harness
+- [x] **Demo player page migrated** to `<avbridge-video>` — surfaced one TS friction point (`addEventListener("error")` collides with the standard DOM `ErrorEvent` typing) which is the right kind of feedback for a quality harness
 - [ ] Phase B: built-in controls UI, diagnostics panel, `<track>` children, drag-and-drop (post-Phase-A polish)
-- [ ] v1.0 polish: typed `addEventListener` overloads on `AvbridgePlayerElement` so consumers don't need `as unknown as CustomEvent` casts
+- [ ] v1.0 polish: typed `addEventListener` overloads on `AvbridgeVideoElement` so consumers don't need `as unknown as CustomEvent` casts
 
 ## Current status
 
@@ -256,7 +260,7 @@ Built as a subpath export (`avbridge/element`) — see [`WEB_COMPONENT_SPEC.md`]
 - **8/8 bundle audit scenarios** within budget (including `core-no-element` and `element-only`)
 - Headless Chromium H.264 encoder first-call init bug worked around with library-level auto-retry
 - MPEG-TS support — covers ~93% of typical "fallback" files
-- Both player and converter demos working; player demo now uses `<avbridge-player>`
+- Both player and converter demos working; player demo now uses `<avbridge-video>`
 - README, CHANGELOG, `.d.ts`, code-splitting all clean
 
 Remaining work to publish v1.0:

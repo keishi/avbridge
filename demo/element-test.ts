@@ -1,11 +1,11 @@
-// Test harness for the avbridge-player lifecycle tests in
+// Test harness for the avbridge-video lifecycle tests in
 // scripts/element-test.mjs. Imports the element entry (registering the
 // custom element) and exposes a small imperative API on window.harness so
 // the Puppeteer driver can manipulate elements without re-implementing
 // every test scenario in browser-eval strings.
 
 import "../src/element.js";
-import type { AvbridgePlayerElement } from "../src/element/avbridge-player.js";
+import type { AvbridgeVideoElement } from "../src/element/avbridge-video.js";
 
 interface EventLogEntry {
   type: string;
@@ -15,9 +15,9 @@ interface EventLogEntry {
 
 interface Harness {
   /** Replace the active element with a fresh one. Returns the new element. */
-  reset(): AvbridgePlayerElement;
+  reset(): AvbridgeVideoElement;
   /** Get the current element. */
-  get(): AvbridgePlayerElement | null;
+  get(): AvbridgeVideoElement | null;
   /** Set src on the current element. */
   setSrc(src: string | null): void;
   /** Set source on the current element from a fetched URL. */
@@ -46,14 +46,14 @@ interface Harness {
   };
 }
 
-let element: AvbridgePlayerElement | null = null;
+let element: AvbridgeVideoElement | null = null;
 let log: EventLogEntry[] = [];
 
 const containerEl = document.getElementById("container") as HTMLDivElement;
 
 const TRACKED_EVENTS = ["loadstart", "ready", "error", "strategychange", "trackschange", "destroy"];
 
-function attachLogger(el: AvbridgePlayerElement): void {
+function attachLogger(el: AvbridgeVideoElement): void {
   for (const name of TRACKED_EVENTS) {
     el.addEventListener(name, (e) => {
       log.push({
@@ -71,7 +71,7 @@ const harness: Harness = {
       try { element.remove(); } catch { /* ignore */ }
     }
     log = [];
-    element = document.createElement("avbridge-player") as AvbridgePlayerElement;
+    element = document.createElement("avbridge-video") as AvbridgeVideoElement;
     attachLogger(element);
     containerEl.appendChild(element);
     return element;

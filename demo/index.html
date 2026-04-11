@@ -11,8 +11,8 @@
 
       .player { position: relative; background: #000; aspect-ratio: 16/9; }
       .player video,
-      .player avbridge-player { width: 100%; height: 100%; display: block; }
-      avbridge-player::part(video) { background: #000; }
+      .player avbridge-video { width: 100%; height: 100%; display: block; }
+      avbridge-video::part(video) { background: #000; }
 
       .controls { display: flex; gap: 12px; align-items: center; padding: 10px 12px; background: #1a1a1a; border-radius: 0 0 6px 6px; }
       .controls button { background: #333; color: #eee; border: none; padding: 6px 12px; border-radius: 4px; font-size: 14px; cursor: pointer; min-width: 44px; }
@@ -54,7 +54,7 @@
     </div>
 
     <div class="player">
-      <avbridge-player id="player"></avbridge-player>
+      <avbridge-video id="player"></avbridge-video>
     </div>
     <div class="controls">
       <button id="playPause" disabled>▶</button>

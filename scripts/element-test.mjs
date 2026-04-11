@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Lifecycle correctness tests for `<avbridge-player>`.
+ * Lifecycle correctness tests for `<avbridge-video>`.
  *
  * Drives `demo/element-test.html` via Puppeteer. Each test exercises one
  * of the P0 cases from docs/dev/WEB_COMPONENT_SPEC.md and verifies that the element

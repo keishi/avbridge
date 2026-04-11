@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { classify } from "../src/classify/index.js";
+import { mediabunnyVideoToAvbridge, mediabunnyAudioToAvbridge } from "../src/probe/mediabunny.js";
 import type { MediaContext } from "../src/types.js";
 
 function ctx(partial: Partial<MediaContext>): MediaContext {
@@ -157,6 +158,43 @@ describe("classify", () => {
         (globalThis as unknown as Record<string, unknown>).VideoDecoder = saved;
       }
     }
+  });
+
+  it("routes an unknown video codec to fallback (does NOT silently relabel as h264)", () => {
+    // Regression: mediabunnyVideoToAvbridge used to default to "h264" for any
+    // unrecognized codec, which sent unsupported media down the native/remux
+    // path and produced opaque playback failures.
+    const c = classify(
+      ctx({
+        container: "mp4",
+        videoTracks: [
+          { id: 0, codec: mediabunnyVideoToAvbridge("some-future-codec"), width: 1920, height: 1080 },
+        ],
+        audioTracks: [{ id: 1, codec: "aac", channels: 2, sampleRate: 48000 }],
+      }),
+    );
+    expect(c.strategy).toBe("fallback");
+    expect(c.class).toBe("FALLBACK_REQUIRED");
+    expect(c.reason).toContain("some-future-codec");
+  });
+
+  it("routes a null video codec to fallback as 'unknown'", () => {
+    expect(mediabunnyVideoToAvbridge(null)).toBe("unknown");
+    expect(mediabunnyVideoToAvbridge(undefined)).toBe("unknown");
+    const c = classify(
+      ctx({
+        container: "mp4",
+        videoTracks: [
+          { id: 0, codec: mediabunnyVideoToAvbridge(null), width: 1920, height: 1080 },
+        ],
+      }),
+    );
+    expect(c.strategy).toBe("fallback");
+  });
+
+  it("does not silently relabel a null audio codec as aac", () => {
+    expect(mediabunnyAudioToAvbridge(null)).toBe("unknown");
+    expect(mediabunnyAudioToAvbridge(undefined)).toBe("unknown");
   });
 
   it("flags Hi10P with fallbackChain", () => {

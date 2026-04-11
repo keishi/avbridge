@@ -87,11 +87,11 @@ const SCENARIOS = [
     description: "import everything from core — element code MUST be absent",
     code: `import * as a from "${ESM_PATH}"; export { a };`,
     maxEagerGzip: 25_000,
-    forbidInEntry: ["customElements.define", '"avbridge-player"', "AvbridgePlayerElement"],
+    forbidInEntry: ["customElements.define", '"avbridge-video"', "AvbridgeVideoElement"],
   },
   {
     name: "element-only",
-    description: "import 'avbridge/element' — registers <avbridge-player>",
+    description: "import 'avbridge/element' — registers <avbridge-video>",
     code: `import "${ELEMENT_PATH}";`,
     // Element entry includes the full createPlayer engine since the element
     // wraps it. ~16 KB gzip is a reasonable ceiling.

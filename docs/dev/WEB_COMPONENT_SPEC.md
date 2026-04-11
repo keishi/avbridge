@@ -1,14 +1,22 @@
-# `<avbridge-player>` — Web Component Spec
+# `<avbridge-video>` — Web Component Spec
 
 This document is the contract for the reference web component shipped as the
 `avbridge/element` subpath export. It exists to:
 
 1. **Validate the public API** by being a real consumer of `createPlayer()`.
 2. **Drive lifecycle correctness** in the core via adversarial integration tests.
-3. **Provide a thin reference implementation** for users who want a drop-in player.
+3. **Provide an `HTMLMediaElement`-compatible primitive** that consumers can
+   wrap with their own UI.
 
-It is **not** a player UI framework. If users want skinning, theming, or
-plugins, they should use `createPlayer()` directly.
+It is **not** a player UI framework. The element ships zero controls. The
+tag name `<avbridge-video>` is **reserved** for a future controls-bearing
+element built on top of `<avbridge-video>`; until that exists, this document
+covers only `<avbridge-video>`.
+
+> **History:** in 1.x this element was named `<avbridge-video>`. It was
+> renamed to `<avbridge-video>` in 2.0 because the original name oversold
+> what the element does (it has no UI), and to free `<avbridge-video>` for
+> the future controls-bearing sibling.
 
 ---
 
@@ -25,8 +33,11 @@ plugins, they should use `createPlayer()` directly.
 ## Element name
 
 ```html
-<avbridge-player></avbridge-player>
+<avbridge-video></avbridge-video>
 ```
+
+`<avbridge-video>` is **reserved** and not registered. Importing
+`avbridge/element` only registers `<avbridge-video>`.
 
 ---
 
@@ -156,9 +167,9 @@ Never:
 The element supports declarative `<track>` children mirroring native `<video>`:
 
 ```html
-<avbridge-player src="/movie.mkv" controls>
+<avbridge-video src="/movie.mkv" controls>
   <track kind="subtitles" srclang="en" label="English" src="/subs/movie-en.vtt" default>
-</avbridge-player>
+</avbridge-video>
 ```
 
 Tracks are picked up at bootstrap. Tracks added/removed dynamically via DOM
@@ -245,8 +256,8 @@ preserve state across moves.
 The element entry MUST guard against double registration:
 
 ```ts
-if (!customElements.get("avbridge-player")) {
-  customElements.define("avbridge-player", AvbridgePlayerElement);
+if (!customElements.get("avbridge-video")) {
+  customElements.define("avbridge-video", AvbridgeVideoElement);
 }
 ```
 
@@ -348,7 +359,7 @@ Phase A delivers the lifecycle scaffold only:
 - Bootstrap token pattern enforcing all five lifecycle invariants
 - Shadow DOM with just `<video part="video">` inside
 - All P0 lifecycle tests passing
-- Demo migrated to use `<avbridge-player>`
+- Demo migrated to use `<avbridge-video>`
 
 Phase B (later) adds:
 
@@ -394,7 +405,7 @@ import type {
   DiagnosticsSnapshot,
 } from "avbridge";
 
-export interface AvbridgePlayerElement extends HTMLElement {
+export interface AvbridgeVideoElement extends HTMLElement {
   src: string | null;
   source: MediaInput | null;
   autoplay: boolean;
@@ -432,7 +443,7 @@ export interface AvbridgePlayerElement extends HTMLElement {
 
 declare global {
   interface HTMLElementTagNameMap {
-    "avbridge-player": AvbridgePlayerElement;
+    "avbridge-video": AvbridgeVideoElement;
   }
 }
 ```
@@ -444,13 +455,13 @@ declare global {
 ### URL source, declarative
 
 ```html
-<avbridge-player src="/media/movie.mkv"></avbridge-player>
+<avbridge-video src="/media/movie.mkv"></avbridge-video>
 ```
 
 ### File input, imperative
 
 ```ts
-const el = document.querySelector("avbridge-player")!;
+const el = document.querySelector("avbridge-video")!;
 el.source = file;
 await el.play();
 ```
@@ -458,15 +469,15 @@ await el.play();
 ### Diagnostics opt-in
 
 ```html
-<avbridge-player src="/movie.avi" diagnostics></avbridge-player>
+<avbridge-video src="/movie.avi" diagnostics></avbridge-video>
 ```
 
 ### Sidecar subtitles
 
 ```html
-<avbridge-player src="/movie.mkv">
+<avbridge-video src="/movie.mkv">
   <track kind="subtitles" srclang="en" label="English" src="/subs/movie-en.vtt" default>
-</avbridge-player>
+</avbridge-video>
 ```
 
 ### Strategy preference (power user)
@@ -481,7 +492,7 @@ el.addEventListener("strategychange", (e) => {
 ### Escape hatch
 
 ```ts
-const el = document.querySelector("avbridge-player")!;
+const el = document.querySelector("avbridge-video")!;
 const player = el.player; // UnifiedPlayer | null
 if (player) {
   await player.setStrategy("fallback");

@@ -1,4 +1,4 @@
-// Player demo — uses the <avbridge-player> reference component instead of
+// Player demo — uses the <avbridge-video> reference component instead of
 // wiring createPlayer() directly. The component owns the lifecycle, so this
 // file is mostly UI glue.
 //
@@ -6,12 +6,12 @@
 // core and the element entry coexist cleanly.
 
 import "../src/element.js";
-import type { AvbridgePlayerElement } from "../src/element/avbridge-player.js";
+import type { AvbridgeVideoElement } from "../src/element/avbridge-video.js";
 import type { StrategyName } from "../src/index.js";
 
 const fileInput = document.getElementById("file") as HTMLInputElement;
 const subInput = document.getElementById("subs") as HTMLInputElement;
-const player = document.getElementById("player") as AvbridgePlayerElement;
+const player = document.getElementById("player") as AvbridgeVideoElement;
 const badge = document.getElementById("badge")!;
 const diag = document.getElementById("diagnostics")!;
 const errorEl = document.getElementById("error")!;

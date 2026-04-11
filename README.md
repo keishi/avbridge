@@ -348,7 +348,7 @@ core (native + remux for modern containers) doesn't need any of this.
 - libav.js **threading is disabled** due to bugs in v6.8.8 — decode runs single-threaded with SIMD acceleration.
 - `transcode()` v1 only accepts mediabunny-readable inputs (MP4/MKV/WebM/OGG/MOV/MP3/FLAC/WAV). AVI/ASF/FLV transcoding is planned for v1.1.
 - `transcode()` uses **WebCodecs encoders only** — codec availability depends on the browser. AV1 encoding is not yet universal.
-- For the **hybrid and fallback strategies**, `<avbridge-player>.buffered` returns an empty `TimeRanges` because the canvas-based renderers don't track buffered ranges yet. Native and remux strategies expose the full `<video>.buffered` set as expected.
+- For the **hybrid and fallback strategies**, `<avbridge-video>.buffered` returns an empty `TimeRanges` because the canvas-based renderers don't track buffered ranges yet. Native and remux strategies expose the full `<video>.buffered` set as expected.
 
 ## Demos
 

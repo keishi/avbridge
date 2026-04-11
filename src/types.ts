@@ -230,9 +230,16 @@ export interface CreatePlayerOptions {
    */
   directory?: FileSystemDirectoryHandle;
   /**
-   * Override the strategy decision. Useful for diagnostics and tests.
+   * Skip classification and start with the given strategy. Useful for
+   * diagnostics, tests, and consumers that already know the right path.
+   *
+   * **Note:** this is the *initial* strategy, not a hard force — if the
+   * named strategy fails to start, the player still walks the fallback
+   * chain like a normal classification would. The strategy class shown in
+   * diagnostics matches whatever the picked strategy actually is, not
+   * "NATIVE" by default.
    */
-  forceStrategy?: StrategyName;
+  initialStrategy?: StrategyName;
   /** Inject extra plugins; they take priority over built-ins. */
   plugins?: Plugin[];
   /**

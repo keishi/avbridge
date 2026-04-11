@@ -4,6 +4,99 @@ All notable changes to **avbridge** are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0]
+
+### Breaking changes
+
+- **`createPlayer({ forceStrategy })` renamed to `{ initialStrategy }`.**
+  The old name implied a hard force, but the player has always walked the
+  fallback chain on failure regardless. The new name matches the actual
+  semantics: the named strategy is the *initial* pick, and escalation still
+  applies if it fails. **Migration:** rename the option key. Behavior is
+  unchanged for consumers who passed a strategy that successfully started.
+
+- **`discoverSidecar()` renamed to `discoverSidecars()`.** The function
+  always returned an array; the singular name was misleading. **Migration:**
+  rename the import. No semantic change.
+
+- **`<avbridge-player>` was renamed to `<avbridge-video>`.** The element is
+  semantically an `HTMLMediaElement`-compatible primitive — it has no UI,
+  no controls, and is intended as a drop-in replacement for `<video>`. The
+  old name oversold what it does. The new name matches the contract.
+  - The class export is now `AvbridgeVideoElement` (was `AvbridgePlayerElement`).
+  - The source file is `src/element/avbridge-video.ts`.
+  - The subpath import is unchanged: `import "avbridge/element"` still
+    registers the element. It now registers `<avbridge-video>` instead of
+    `<avbridge-player>`.
+  - **Migration**: rename every `<avbridge-player>` tag, every
+    `AvbridgePlayerElement` reference, and any CSS selectors targeting the
+    old tag. There is no compatibility shim — `<avbridge-player>` is **not**
+    registered in 2.0 because the name is reserved for the future
+    controls-bearing element.
+
+### Reserved
+
+- **`<avbridge-player>` is reserved** for a future controls-bearing element
+  that ships built-in player UI (seek bar, play/pause, subtitle/audio menus,
+  drag-and-drop, etc.). It does not exist yet. Importing `avbridge/element`
+  registers only `<avbridge-video>`.
+
+### Fixed
+
+- **Unknown video/audio codecs no longer silently relabel as `h264`/`aac`.**
+  `mediabunnyVideoToAvbridge()` and `mediabunnyAudioToAvbridge()` used to
+  default unknown inputs to the most common codec name, which sent
+  unsupported media down the native/remux path and produced opaque "playback
+  failed" errors. They now preserve the original codec string (or return
+  `"unknown"` for `null`/`undefined`), and the classifier routes anything
+  outside `NATIVE_VIDEO_CODECS` / `NATIVE_AUDIO_CODECS` to fallback as
+  intended. Reported in CODE_REVIEW finding #1.
+
+- **Strategy escalation now walks the entire fallback chain.** Previously,
+  if an intermediate fallback step failed to start, `doEscalate()` emitted
+  an error and gave up — even when later viable strategies remained in the
+  chain. This was inconsistent with the initial bootstrap path
+  (`startSession`), which already recurses. Escalation now loops until a
+  strategy starts or the chain is exhausted, and the final error message
+  lists every attempted strategy with its individual failure reason.
+  Reported in CODE_REVIEW finding #4.
+
+- **`initialStrategy` now reports the correct `strategyClass` in
+  diagnostics.** The old `forceStrategy` path hard-coded
+  `class: "NATIVE"` regardless of the picked strategy, so any downstream
+  logic that trusted `strategyClass` got the wrong answer for forced
+  remux/hybrid/fallback runs. The class is now derived from the actual
+  picked strategy. Reported in CODE_REVIEW finding #2.
+
+- **`<avbridge-video>`'s `preferredStrategy` is now wired through to
+  `createPlayer({ initialStrategy })`.** It was previously inert — settable
+  but ignored at bootstrap. Reported in CODE_REVIEW finding #7.
+
+- **Subtitle attachment is awaited during bootstrap and per-track failures
+  are caught.** `attachSubtitleTracks()` was previously called without
+  `await`, so fetch/parse errors became unhandled rejections and `ready`
+  could fire before subtitle tracks existed. The call is now awaited, and
+  individual track failures are caught via an `onError` callback so a
+  single bad sidecar doesn't break bootstrap. The player logs them via
+  `console.warn`; promoting that to a typed `subtitleerror` event on the
+  player is a follow-up. Subtitles are not load-bearing for playback.
+  Reported in CODE_REVIEW finding #3.
+
+- **Subtitle blob URLs are now revoked at player teardown.** Sidecar
+  discovery and SRT→VTT conversion both created blob URLs that were never
+  revoked, leaking memory across repeated source swaps in long-lived SPAs.
+  A new `SubtitleResourceBag` owns every URL the player creates and
+  releases them in `destroy()`. Reported in CODE_REVIEW finding #5.
+
+- **Diagnostics no longer claim `rangeSupported: true` for URL inputs by
+  default.** The old code inferred Range support from the input type
+  (`typeof src === "string" → rangeSupported: true`), but the native and
+  remux URL paths rely on the browser's or mediabunny's own Range handling
+  and don't fail-fast on a non-supporting server, so the claim could be a
+  lie. The field is now `undefined` until a strategy actively confirms it
+  via the new `Diagnostics.recordTransport()` hook. Reported in
+  CODE_REVIEW finding #6.
+
 ## [1.1.0]
 
 ### Added

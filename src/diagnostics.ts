@@ -42,17 +42,39 @@ export class Diagnostics {
     }
     const a = ctx.audioTracks[0];
     if (a) this.audioCodec = a.codec;
-    // Source-type detection: URL strings / URL objects stream via Range
-    // requests; everything else is in-memory.
+    // Source-type detection. For blob inputs we know the transport with
+    // certainty. For URL inputs we know the *intended* transport but not
+    // whether the server actually honors Range — that's confirmed later by
+    // the strategy that fetches the bytes (via {@link recordTransport}).
     const src = ctx.source;
     if (typeof src === "string" || src instanceof URL) {
       this.sourceType = "url";
       this.transport = "http-range";
-      this.rangeSupported = true; // we fail fast otherwise — see attachLibavHttpReader
+      // Intentionally NOT setting rangeSupported here. Inferring "true" from
+      // input type was misleading: native/remux URL paths rely on the
+      // browser's or mediabunny's own Range handling and don't fail-fast on
+      // a non-supporting server. Strategies that prove Range support call
+      // recordTransport() once they have a confirmed answer.
+      this.rangeSupported = undefined;
     } else {
       this.sourceType = "blob";
       this.transport = "memory";
+      this.rangeSupported = false;
     }
+  }
+
+  /**
+   * Called by a strategy once it has a confirmed answer about how the
+   * source bytes are actually flowing (e.g. after the libav HTTP block
+   * reader's initial Range probe succeeded). Lets diagnostics report the
+   * truth instead of an input-type heuristic.
+   */
+  recordTransport(
+    transport: NonNullable<DiagnosticsSnapshot["transport"]>,
+    rangeSupported: boolean,
+  ): void {
+    this.transport = transport;
+    this.rangeSupported = rangeSupported;
   }
 
   recordClassification(c: Classification): void {
@@ -62,7 +84,23 @@ export class Diagnostics {
   }
 
   recordRuntime(stats: Record<string, unknown>): void {
-    this.runtime = { ...this.runtime, ...stats };
+    // Strategies can surface confirmed transport info in their runtime
+    // stats under the well-known `_transport` / `_rangeSupported` keys.
+    // When present, they're hoisted to the typed fields via
+    // recordTransport() and stripped from the generic runtime bag so they
+    // don't duplicate.
+    const {
+      _transport,
+      _rangeSupported,
+      ...rest
+    } = stats as Record<string, unknown> & {
+      _transport?: NonNullable<DiagnosticsSnapshot["transport"]>;
+      _rangeSupported?: boolean;
+    };
+    if (_transport != null && typeof _rangeSupported === "boolean") {
+      this.recordTransport(_transport, _rangeSupported);
+    }
+    this.runtime = { ...this.runtime, ...rest };
   }
 
   recordStrategySwitch(strategy: StrategyName, reason: string): void {

@@ -26,7 +26,7 @@ npm run demo                       # http://localhost:5173/
 
 - `/` — player demo (drop a file, watch the strategy badge)
 - `/convert.html` — HandBrake-like converter UI
-- `/element-test.html` — `<avbridge-player>` test harness (used by lifecycle tests)
+- `/element-test.html` — `<avbridge-video>` test harness (used by lifecycle tests)
 
 ## Test fixtures
 
@@ -60,7 +60,7 @@ npm run test:url-streaming             # URL → Range request streaming
 src/
 ├── classify/         # rules engine: which strategy for which file
 ├── convert/          # remux() + transcode() standalone exports
-├── element/          # <avbridge-player> custom element
+├── element/          # <avbridge-video> custom element
 ├── plugins/          # strategy registry
 ├── probe/            # source sniffing + mediabunny / libav probing
 ├── strategies/

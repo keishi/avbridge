@@ -12,4 +12,4 @@ you're looking for.
 - [`VISION.md`](./VISION.md) — high-level project vision and pillars
 - [`VISION_PLUS.md`](./VISION_PLUS.md) — resilience / "play anything" vision (v2+)
 - [`ROADMAP.md`](./ROADMAP.md) — phase-by-phase implementation roadmap and current status
-- [`WEB_COMPONENT_SPEC.md`](./WEB_COMPONENT_SPEC.md) — `<avbridge-player>` API contract and lifecycle invariants
+- [`WEB_COMPONENT_SPEC.md`](./WEB_COMPONENT_SPEC.md) — `<avbridge-video>` API contract and lifecycle invariants (and the reservation of `<avbridge-player>` for the future controls element)

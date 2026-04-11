@@ -1,0 +1,186 @@
+import { describe, it, expect, beforeAll, vi } from "vitest";
+import { buildInitialDecision } from "../src/player.js";
+import { SubtitleResourceBag } from "../src/subtitles/index.js";
+import { Diagnostics } from "../src/diagnostics.js";
+import type { MediaContext } from "../src/types.js";
+
+// jsdom doesn't ship URL.createObjectURL / revokeObjectURL. Stub them for
+// the bag tests so we can verify the lifecycle without a browser.
+beforeAll(() => {
+  let counter = 0;
+  if (!URL.createObjectURL) {
+    URL.createObjectURL = vi.fn(() => `blob:fake/${++counter}`);
+  }
+  if (!URL.revokeObjectURL) {
+    URL.revokeObjectURL = vi.fn();
+  }
+});
+
+function ctx(partial: Partial<MediaContext>): MediaContext {
+  return {
+    source: new Blob([]),
+    container: "mp4",
+    videoTracks: [],
+    audioTracks: [],
+    subtitleTracks: [],
+    probedBy: "mediabunny",
+    ...partial,
+  } as MediaContext;
+}
+
+describe("buildInitialDecision (regression: forced strategy class)", () => {
+  // Regression: previously buildInitialDecision (then `forceStrategy`) was
+  // hard-coded to `class: "NATIVE"` regardless of the chosen strategy. Any
+  // downstream logic that trusted strategyClass got the wrong answer.
+
+  it("derives REMUX_CANDIDATE class when initialStrategy='remux' on a remuxable container", () => {
+    const decision = buildInitialDecision(
+      "remux",
+      ctx({
+        container: "mkv",
+        videoTracks: [
+          { id: 0, codec: "h264", width: 1280, height: 720, pixelFormat: "yuv420p", bitDepth: 8 },
+        ],
+        audioTracks: [{ id: 1, codec: "aac", channels: 2, sampleRate: 48000 }],
+      }),
+    );
+    expect(decision.strategy).toBe("remux");
+    expect(decision.class).toBe("REMUX_CANDIDATE");
+    expect(decision.reason).toMatch(/initialStrategy/);
+  });
+
+  it("derives FALLBACK_REQUIRED class when initialStrategy='fallback'", () => {
+    const decision = buildInitialDecision(
+      "fallback",
+      ctx({
+        container: "mp4",
+        videoTracks: [
+          { id: 0, codec: "h264", width: 1280, height: 720, pixelFormat: "yuv420p", bitDepth: 8 },
+        ],
+      }),
+    );
+    expect(decision.strategy).toBe("fallback");
+    expect(decision.class).toBe("FALLBACK_REQUIRED");
+  });
+
+  it("derives HYBRID_CANDIDATE class when initialStrategy='hybrid'", () => {
+    const decision = buildInitialDecision(
+      "hybrid",
+      ctx({
+        container: "mp4",
+        videoTracks: [
+          { id: 0, codec: "h264", width: 1280, height: 720, pixelFormat: "yuv420p", bitDepth: 8 },
+        ],
+      }),
+    );
+    expect(decision.strategy).toBe("hybrid");
+    expect(decision.class).toBe("HYBRID_CANDIDATE");
+  });
+
+  it("provides a sensible fallback chain so escalation can still walk it", () => {
+    const decision = buildInitialDecision(
+      "native",
+      ctx({
+        container: "mp4",
+        videoTracks: [
+          { id: 0, codec: "h264", width: 1280, height: 720, pixelFormat: "yuv420p", bitDepth: 8 },
+        ],
+      }),
+    );
+    expect(decision.fallbackChain).toBeDefined();
+    // Native should be able to escalate down through the chain.
+    expect(decision.fallbackChain!.length).toBeGreaterThan(0);
+  });
+});
+
+describe("Diagnostics transport hoist (regression: URL range overstatement)", () => {
+  // Regression: recordProbe used to hardcode `rangeSupported: true` for any
+  // URL input. Now recordProbe leaves rangeSupported undefined until a
+  // strategy confirms via recordTransport() — and strategies surface that
+  // confirmation by putting `_transport` / `_rangeSupported` into their
+  // runtime stats, which recordRuntime hoists to the typed fields.
+
+  function probeCtx(src: string | Blob): MediaContext {
+    return {
+      source: src,
+      container: "mp4",
+      videoTracks: [],
+      audioTracks: [],
+      subtitleTracks: [],
+      probedBy: "mediabunny",
+    } as MediaContext;
+  }
+
+  it("URL input starts with rangeSupported undefined (no false claim)", () => {
+    const d = new Diagnostics();
+    d.recordProbe(probeCtx("https://example.com/a.mp4"));
+    const snap = d.snapshot();
+    expect(snap.sourceType).toBe("url");
+    expect(snap.transport).toBe("http-range");
+    expect(snap.rangeSupported).toBeUndefined();
+  });
+
+  it("Blob input reports memory transport with rangeSupported: false", () => {
+    const d = new Diagnostics();
+    d.recordProbe(probeCtx(new Blob(["x"])));
+    const snap = d.snapshot();
+    expect(snap.sourceType).toBe("blob");
+    expect(snap.transport).toBe("memory");
+    expect(snap.rangeSupported).toBe(false);
+  });
+
+  it("recordRuntime hoists _transport / _rangeSupported to typed fields", () => {
+    const d = new Diagnostics();
+    d.recordProbe(probeCtx("https://example.com/a.avi"));
+    d.recordRuntime({
+      packetsRead: 42,
+      _transport: "http-range",
+      _rangeSupported: true,
+    });
+    const snap = d.snapshot();
+    expect(snap.rangeSupported).toBe(true);
+    expect(snap.transport).toBe("http-range");
+    // The well-known keys are stripped from the generic bag.
+    expect(snap.runtime).not.toHaveProperty("_transport");
+    expect(snap.runtime).not.toHaveProperty("_rangeSupported");
+    // Other runtime stats are preserved.
+    expect(snap.runtime?.packetsRead).toBe(42);
+  });
+
+  it("recordTransport can be called directly", () => {
+    const d = new Diagnostics();
+    d.recordProbe(probeCtx("https://example.com/a.mp4"));
+    d.recordTransport("http-range", true);
+    expect(d.snapshot().rangeSupported).toBe(true);
+  });
+});
+
+describe("SubtitleResourceBag (regression: blob URL leak)", () => {
+  // Regression: subtitle sidecar discovery and SRT->VTT conversion both
+  // created blob URLs that were never revoked. Repeated source swaps in a
+  // long-lived SPA leaked memory. The bag is the cleanup primitive.
+
+  it("createObjectURL tracks the URL it returns", () => {
+    const bag = new SubtitleResourceBag();
+    const blob = new Blob(["WEBVTT\n"], { type: "text/vtt" });
+    const url = bag.createObjectURL(blob);
+    expect(url).toMatch(/^blob:/);
+    // Smoke check: revoking should not throw.
+    expect(() => bag.revokeAll()).not.toThrow();
+  });
+
+  it("track() lets externally-created URLs join the bag", () => {
+    const bag = new SubtitleResourceBag();
+    const blob = new Blob(["WEBVTT\n"], { type: "text/vtt" });
+    const url = URL.createObjectURL(blob);
+    bag.track(url);
+    expect(() => bag.revokeAll()).not.toThrow();
+  });
+
+  it("revokeAll is idempotent", () => {
+    const bag = new SubtitleResourceBag();
+    bag.createObjectURL(new Blob(["a"]));
+    bag.revokeAll();
+    expect(() => bag.revokeAll()).not.toThrow();
+  });
+});

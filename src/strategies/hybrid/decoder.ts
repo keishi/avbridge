@@ -341,6 +341,9 @@ export async function startHybridDecoder(opts: StartHybridDecoderOptions): Promi
         videoChunksFed,
         audioFramesDecoded,
         videoDecodeQueueSize: videoDecoder?.decodeQueueSize ?? 0,
+        // Confirmed transport info — see fallback decoder for the pattern.
+        _transport: inputHandle.transport === "http-range" ? "http-range" : "memory",
+        _rangeSupported: inputHandle.transport === "http-range",
         ...opts.renderer.stats(),
         ...opts.audio.stats(),
       };

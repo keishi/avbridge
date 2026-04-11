@@ -221,7 +221,7 @@ async function testFile(browser, filePath) {
     // Determine pass/fail. native + remux both render through the <video>
     // element, so framesPainted (a canvas-only metric) is 0 for them — we
     // verify playback by reading the video's readyState/currentTime. The
-    // demo now uses <avbridge-player>, which exposes these as element
+    // demo now uses <avbridge-video>, which exposes these as element
     // properties (and also keeps a real <video> in its shadow root).
     const usesNativeVideo = diag.strategy === "native" || diag.strategy === "remux";
     const videoState = await page.evaluate(() => {
