@@ -4,7 +4,45 @@ All notable changes to **avbridge** are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.1.0]
+
+### Added
+
+- **`<avbridge-player>` is now a true `<video>` drop-in.** The element gained
+  the missing slice of the `HTMLMediaElement` surface so existing code that
+  reaches for a `<video>` can swap to `<avbridge-player>` with no behavioural
+  changes:
+  - **Properties**: `poster`, `volume`, `playbackRate`, `videoWidth`,
+    `videoHeight`, `played`, `seekable`, `crossOrigin`, `disableRemotePlayback`.
+  - **Method**: `canPlayType(mimeType)` — passes through to the underlying
+    `<video>`. Note that this answers about the *browser's* native support,
+    not avbridge's full capabilities.
+  - **Attributes** (reflected to the inner `<video>`): `poster`, `playsinline`,
+    `crossorigin`, `disableremoteplayback`.
+  - **Event forwarding**: 17 standard `HTMLMediaElement` events are forwarded
+    from the inner `<video>` to the wrapper element — `loadstart`,
+    `loadedmetadata`, `loadeddata`, `canplay`, `canplaythrough`, `play`,
+    `playing`, `pause`, `seeking`, `seeked`, `volumechange`, `ratechange`,
+    `durationchange`, `waiting`, `stalled`, `emptied`, `resize`. Consumers can
+    `el.addEventListener("loadedmetadata", …)` exactly like a real `<video>`.
+  - **`<track>` children**: light-DOM `<track>` elements declared as children
+    of `<avbridge-player>` are now mirrored into the shadow `<video>` and kept
+    in sync via a `MutationObserver`. This works for static HTML markup as
+    well as dynamic insertion / removal.
+  - **`videoElement` getter**: escape hatch returning the underlying shadow
+    `<video>` for native APIs the wrapper doesn't expose
+    (`requestPictureInPicture`, browser-native `audioTracks`, `captureStream`,
+    library integrations needing a real `HTMLVideoElement`). Caveat: when the
+    active strategy is `"fallback"` or `"hybrid"`, frames render to a canvas
+    overlay rather than into this `<video>`, so APIs that depend on the actual
+    pixels won't show the playing content in those modes.
+
+### Changed
+
+- The element's `observedAttributes` list grew to include `poster`,
+  `playsinline`, `crossorigin`, and `disableremoteplayback`.
+
+## [1.0.0]
 
 ### Added
 

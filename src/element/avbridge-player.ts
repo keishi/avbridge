@@ -38,6 +38,40 @@ const PREFERRED_STRATEGY_VALUES = new Set<PreferredStrategy>([
 ]);
 
 /**
+ * Standard `HTMLMediaElement` events we forward from the inner `<video>`
+ * to the wrapper element so consumers can `el.addEventListener("loadedmetadata", ...)`
+ * exactly like they would with a real `<video>`. The element also dispatches
+ * its own custom events (`strategychange`, `ready`, `error`, etc.) — those
+ * are NOT in this list because they're avbridge-specific.
+ *
+ * Note: `progress` and `timeupdate` are deliberately NOT forwarded here.
+ * `progress` is dispatched by the constructor with our own `{ buffered }`
+ * detail. `timeupdate` is dispatched by the player layer (so it works for
+ * canvas-rendered fallback playback too, where the inner <video> never
+ * fires its own timeupdate).
+ */
+const FORWARDED_VIDEO_EVENTS = [
+  "loadstart",
+  "loadedmetadata",
+  "loadeddata",
+  "canplay",
+  "canplaythrough",
+  "play",
+  "playing",
+  "pause",
+  "seeking",
+  "seeked",
+  "volumechange",
+  "ratechange",
+  "durationchange",
+  "waiting",
+  "stalled",
+  "emptied",
+  "resize",
+  "error",
+] as const;
+
+/**
  * `HTMLElement` is a browser-only global. SSR frameworks (Next.js, Astro,
  * Remix, etc.) commonly import library modules on the server to extract
  * types or do tree-shaking, even if the user only ends up using them in
@@ -69,6 +103,10 @@ export class AvbridgePlayerElement extends HTMLElementCtor {
     "muted",
     "loop",
     "preload",
+    "poster",
+    "playsinline",
+    "crossorigin",
+    "disableremoteplayback",
     "diagnostics",
     "preferstrategy",
   ];
@@ -117,6 +155,9 @@ export class AvbridgePlayerElement extends HTMLElementCtor {
   /** Set if play() was called before the player was ready. */
   private _pendingPlay = false;
 
+  /** MutationObserver tracking light-DOM `<track>` children. */
+  private _trackObserver: MutationObserver | null = null;
+
   // ── Construction & lifecycle ───────────────────────────────────────────
 
   constructor() {
@@ -137,10 +178,28 @@ export class AvbridgePlayerElement extends HTMLElementCtor {
       if (this._destroyed) return;
       this._dispatch("progress", { buffered: this._videoEl.buffered });
     });
+
+    // Forward all standard HTMLMediaElement events from the inner <video>
+    // so consumers can use the element as a drop-in <video> replacement.
+    // Each event is re-dispatched on the wrapper element with no detail —
+    // listeners that need state should read it from the element directly.
+    for (const eventName of FORWARDED_VIDEO_EVENTS) {
+      this._videoEl.addEventListener(eventName, () => {
+        if (this._destroyed) return;
+        this.dispatchEvent(new Event(eventName, { bubbles: false }));
+      });
+    }
   }
 
   connectedCallback(): void {
     if (this._destroyed) return;
+    // Pick up any <track> children that were declared in HTML before the
+    // element upgraded, and watch for future additions/removals.
+    this._syncTextTracks();
+    if (!this._trackObserver) {
+      this._trackObserver = new MutationObserver(() => this._syncTextTracks());
+      this._trackObserver.observe(this, { childList: true, subtree: false });
+    }
     // Connection is the trigger for bootstrap. If we have a pending source
     // (set before connect), kick off bootstrap now.
     const source = this._activeSource();
@@ -151,6 +210,10 @@ export class AvbridgePlayerElement extends HTMLElementCtor {
 
   disconnectedCallback(): void {
     if (this._destroyed) return;
+    if (this._trackObserver) {
+      this._trackObserver.disconnect();
+      this._trackObserver = null;
+    }
     // Bump the bootstrap token so any in-flight async work is invalidated
     // before we tear down. _teardown() also bumps but we want the bump to
     // happen synchronously here so any awaited promise that resolves
@@ -169,13 +232,17 @@ export class AvbridgePlayerElement extends HTMLElementCtor {
       case "autoplay":
       case "muted":
       case "loop":
+      case "playsinline":
+      case "disableremoteplayback":
         // Reflect onto the underlying <video> element.
         if (newValue == null) this._videoEl.removeAttribute(name);
         else this._videoEl.setAttribute(name, newValue);
         break;
       case "preload":
-        if (newValue == null) this._videoEl.removeAttribute("preload");
-        else this._videoEl.setAttribute("preload", newValue);
+      case "poster":
+      case "crossorigin":
+        if (newValue == null) this._videoEl.removeAttribute(name);
+        else this._videoEl.setAttribute(name, newValue);
         break;
       case "diagnostics":
         // Phase A: no UI. Property is observable for users via getDiagnostics().
@@ -197,6 +264,29 @@ export class AvbridgePlayerElement extends HTMLElementCtor {
     if (this._source != null) return this._source;
     if (this._src != null) return this._src;
     return null;
+  }
+
+  /**
+   * Mirror light-DOM `<track>` children into the shadow `<video>` so that
+   * the browser's native text-track machinery picks them up. Called on
+   * connect, on every mutation of light-DOM children, and once after each
+   * source change so newly-set tracks survive a fresh `<video>`.
+   *
+   * Strategy: clone the children. We don't move them because the user's
+   * code may still hold references to the originals (e.g. to set `default`).
+   * The shadow copies are throwaway — we wipe them on every sync.
+   */
+  private _syncTextTracks(): void {
+    // Remove existing shadow tracks.
+    const existing = this._videoEl.querySelectorAll("track");
+    for (const t of Array.from(existing)) t.remove();
+    // Clone every <track> light-DOM child into the shadow video.
+    for (const child of Array.from(this.children)) {
+      if (child.tagName === "TRACK") {
+        const clone = child.cloneNode(true) as HTMLTrackElement;
+        this._videoEl.appendChild(clone);
+      }
+    }
   }
 
   /** Internal src setter — separate from the property setter so the
@@ -259,6 +349,11 @@ export class AvbridgePlayerElement extends HTMLElementCtor {
     }
 
     this._player = player;
+
+    // Resync any light-DOM <track> children into the (possibly fresh) shadow
+    // <video>. Strategies that swap or reset the inner video state would
+    // otherwise lose the tracks the user declared in HTML.
+    this._syncTextTracks();
 
     // Wire events. The unsubscribe handles are not stored individually
     // because destroy() will tear down the whole session anyway.
@@ -476,11 +571,98 @@ export class AvbridgePlayerElement extends HTMLElementCtor {
    * `<video>.buffered` `TimeRanges` API. For the native and remux strategies
    * this reflects the underlying SourceBuffer / progressive download state.
    * For the hybrid and fallback (canvas-rendered) strategies it currently
-   * returns an empty TimeRanges; v1.1 will synthesize a coarse range from
-   * the decoder's read position.
+   * returns an empty TimeRanges; a future release will synthesize a coarse
+   * range from the decoder's read position.
    */
   get buffered(): TimeRanges {
     return this._videoEl.buffered;
+  }
+
+  // ── HTMLMediaElement parity ───────────────────────────────────────────
+  // Mirror the standard <video> surface so consumers can drop the element
+  // in as a <video> replacement. Each property is a thin passthrough to the
+  // shadow `<video>`.
+
+  get poster(): string {
+    return this._videoEl.poster;
+  }
+  set poster(value: string) {
+    if (value == null || value === "") this.removeAttribute("poster");
+    else this.setAttribute("poster", value);
+  }
+
+  get volume(): number {
+    return this._videoEl.volume;
+  }
+  set volume(value: number) {
+    this._videoEl.volume = value;
+  }
+
+  get playbackRate(): number {
+    return this._videoEl.playbackRate;
+  }
+  set playbackRate(value: number) {
+    this._videoEl.playbackRate = value;
+  }
+
+  get videoWidth(): number {
+    return this._videoEl.videoWidth;
+  }
+
+  get videoHeight(): number {
+    return this._videoEl.videoHeight;
+  }
+
+  get played(): TimeRanges {
+    return this._videoEl.played;
+  }
+
+  get seekable(): TimeRanges {
+    return this._videoEl.seekable;
+  }
+
+  get crossOrigin(): string | null {
+    return this._videoEl.crossOrigin;
+  }
+  set crossOrigin(value: string | null) {
+    if (value == null) this.removeAttribute("crossorigin");
+    else this.setAttribute("crossorigin", value);
+  }
+
+  get disableRemotePlayback(): boolean {
+    return this._videoEl.disableRemotePlayback;
+  }
+  set disableRemotePlayback(value: boolean) {
+    if (value) this.setAttribute("disableremoteplayback", "");
+    else this.removeAttribute("disableremoteplayback");
+  }
+
+  /**
+   * Native `HTMLMediaElement.canPlayType()` passthrough. Note that this
+   * answers about the *browser's* native support, not avbridge's full
+   * capabilities — avbridge can play many formats this method returns ""
+   * for, by routing them to the remux/hybrid/fallback strategies.
+   */
+  canPlayType(mimeType: string): CanPlayTypeResult {
+    return this._videoEl.canPlayType(mimeType);
+  }
+
+  /**
+   * **Escape hatch.** The underlying shadow-DOM `<video>` element.
+   *
+   * Use for native browser APIs the wrapper doesn't expose:
+   * - `el.videoElement.requestPictureInPicture()`
+   * - `el.videoElement.audioTracks` (browser native, not avbridge's track list)
+   * - direct integration with libraries that need a real HTMLVideoElement
+   *
+   * **Caveat:** When the active strategy is `"fallback"` or `"hybrid"`,
+   * frames are rendered to a canvas overlay, not into this `<video>`.
+   * APIs that depend on the actual pixels (Picture-in-Picture, captureStream)
+   * will not show the playing content in those modes. Check `el.strategy`
+   * before using such APIs.
+   */
+  get videoElement(): HTMLVideoElement {
+    return this._videoEl;
   }
 
   get strategy(): StrategyName | null {

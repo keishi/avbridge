@@ -36,11 +36,15 @@ plugins, they should use `createPlayer()` directly.
 
 - `src` — URL string source
 - `autoplay` — boolean
-- `controls` — boolean (reserved for v1.1; Phase A is no-UI)
+- `controls` — boolean (reserved; the element ships no built-in UI)
 - `muted` — boolean
 - `loop` — boolean
 - `preload` — `"none" | "metadata" | "auto"`
-- `diagnostics` — boolean (reserved for v1.1)
+- `poster` — URL string (passed through to the inner `<video>`)
+- `playsinline` — boolean (passed through to the inner `<video>`)
+- `crossorigin` — `"anonymous" | "use-credentials"` (passed through)
+- `disableremoteplayback` — boolean (passed through)
+- `diagnostics` — boolean (reserved)
 - `preferstrategy` — `"auto" | "native" | "remux" | "hybrid" | "fallback"` (preference, not a command)
 
 ### Properties
@@ -65,6 +69,26 @@ plugins, they should use `createPlayer()` directly.
 - `readonly audioTracks: AudioTrackInfo[]`
 - `readonly subtitleTracks: SubtitleTrackInfo[]`
 
+#### `HTMLMediaElement` parity surface (added in 1.1)
+
+- `poster: string`
+- `volume: number`
+- `playbackRate: number`
+- `readonly videoWidth: number`
+- `readonly videoHeight: number`
+- `readonly played: TimeRanges`
+- `readonly seekable: TimeRanges`
+- `readonly buffered: TimeRanges`
+- `crossOrigin: string | null`
+- `disableRemotePlayback: boolean`
+- `readonly videoElement: HTMLVideoElement` — escape hatch returning the
+  underlying shadow `<video>`. Use for browser-native APIs the wrapper
+  doesn't expose (`requestPictureInPicture`, native `audioTracks`,
+  `captureStream`, library integrations needing a real `HTMLVideoElement`).
+  **Caveat:** when the active strategy is `"fallback"` or `"hybrid"`, frames
+  render to a canvas overlay rather than into this `<video>`, so APIs that
+  depend on the actual pixels won't show the playing content in those modes.
+
 ### Methods
 
 - `play(): Promise<void>`
@@ -74,6 +98,10 @@ plugins, they should use `createPlayer()` directly.
 - `setAudioTrack(id: number): Promise<void>`
 - `setSubtitleTrack(id: number | null): Promise<void>`
 - `addTextTrack(track: AvbridgeTextTrackInit): Promise<void>`
+- `canPlayType(mimeType: string): "" | "maybe" | "probably"` — passes through
+  to the inner `<video>`. Note that this answers about the *browser's* native
+  support, not avbridge's full capabilities — avbridge can play many formats
+  this method returns `""` for.
 - `getDiagnostics(): DiagnosticsSnapshot | null`
 
 ### Events (DOM `CustomEvent`)
@@ -85,6 +113,21 @@ plugins, they should use `createPlayer()` directly.
 - `loadstart` (optional) — fired when bootstrap begins
 - `sourcechange` (optional) — fired when `src`/`source` changes
 - `destroy` (optional) — fired when element is destroyed
+
+#### Forwarded `HTMLMediaElement` events (added in 1.1)
+
+The element forwards every standard `HTMLMediaElement` event from the inner
+`<video>` to the wrapper, so consumers can `el.addEventListener(name, …)`
+exactly like they would on a real `<video>`:
+
+`loadstart`, `loadedmetadata`, `loadeddata`, `canplay`, `canplaythrough`,
+`play`, `playing`, `pause`, `seeking`, `seeked`, `volumechange`, `ratechange`,
+`durationchange`, `waiting`, `stalled`, `emptied`, `resize`, `error`.
+
+`progress` is dispatched by the wrapper itself with a `{ buffered }` detail.
+`timeupdate` is dispatched by the player layer (so it works for canvas-rendered
+fallback playback too, where the inner `<video>` never fires its own
+`timeupdate`).
 
 ### Event ordering invariant
 
