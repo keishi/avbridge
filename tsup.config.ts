@@ -44,13 +44,16 @@ export default defineConfig([
   // 2. Pre-bundled browser entry: `dist/element-browser.js`.
   //
   //    Single-file output intended for direct `<script type="module">`
-  //    consumption without a bundler. mediabunny is inlined (so the output
-  //    has no bare `import "mediabunny"` specifiers); mediabunny's Node-
-  //    branch `node:fs/promises` import is aliased to a stub that throws
-  //    loudly if ever reached. libav.js stays external and is lazy-loaded
-  //    at runtime from `../vendor/libav/` relative to this file's URL —
-  //    which, because we ship `vendor/libav/` alongside `dist/`, means
-  //    zero consumer configuration.
+  //    consumption without a bundler. Every bare-specifier dependency is
+  //    either inlined (mediabunny, libavjs-webcodecs-bridge) or handled
+  //    via a runtime URL (the libav.js variants under vendor/libav/,
+  //    lazy-loaded via `import(variantUrl)` against `import.meta.url`).
+  //    mediabunny's Node-branch `node:fs/promises` import is aliased to a
+  //    stub that throws loudly if ever reached.
+  //
+  //    Net effect: this single file has zero remaining bare specifiers at
+  //    runtime and is safe to load via `<script type="module" src="...">`
+  //    without a bundler or an import map.
   //
   //    The classic `dist/element.js` and `dist/index.js` entries above are
   //    not affected; this is additive.
@@ -66,11 +69,18 @@ export default defineConfig([
     platform: "browser",
     splitting: false, // single-file output
     treeshake: true,
-    noExternal: ["mediabunny"], // inline mediabunny into the bundle
+    // Inline every bare-specifier dep so the browser doesn't have to
+    // resolve any module specifier at runtime. libavjs-webcodecs-bridge
+    // is a small ESM helper with no Node-specific code, so inlining it
+    // is cheap.
+    noExternal: ["mediabunny", "libavjs-webcodecs-bridge"],
     external: [
+      // The actual libav.js WASM variants — these are lazy-loaded at
+      // runtime via a URL-based dynamic import (not a bare specifier),
+      // so they stay external and the loader resolves them through
+      // `new URL("../vendor/libav/...", import.meta.url)`.
       "@libav.js/variant-webcodecs",
       "@libav.js/types",
-      "libavjs-webcodecs-bridge",
     ],
     esbuildOptions(options) {
       // Alias node:fs/promises → our stub so mediabunny's ./node.js import

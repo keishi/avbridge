@@ -4,6 +4,19 @@ All notable changes to **avbridge** are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.1]
+
+### Fixed
+
+- **`dist/element-browser.js` no longer has a bare `libavjs-webcodecs-bridge`
+  import.** 2.1.0 inlined mediabunny into the browser bundle but left
+  `libavjs-webcodecs-bridge` external, so direct
+  `<script type="module">` consumers hit
+  `Failed to resolve module specifier "libavjs-webcodecs-bridge"` on load.
+  The browser entry now inlines it via `noExternal`. Only the actual
+  libav.js WASM variants stay external, and those are loaded via URL
+  dynamic imports relative to `import.meta.url`, not bare specifiers.
+
 ## [2.1.0]
 
 ### Added
