@@ -177,7 +177,9 @@ function ffmpegToAvbridgeVideo(name: string): VideoCodec {
     case "mpeg2video": return "mpeg2";
     case "mpeg1video": return "mpeg1";
     case "theora": return "theora";
-    case "rv30":
+    case "rv10":   return "rv10";
+    case "rv20":   return "rv20";
+    case "rv30":   return "rv30";
     case "rv40":   return "rv40";
     default:       return name as VideoCodec;
   }
@@ -198,6 +200,11 @@ function ffmpegToAvbridgeAudio(name: string): AudioCodec {
     case "wmav2":  return "wmav2";
     case "wmapro": return "wmapro";
     case "alac":   return "alac";
+    case "cook":   return "cook";
+    case "ra_144": return "ra_144";
+    case "ra_288": return "ra_288";
+    case "sipr":   return "sipr";
+    case "atrac3": return "atrac3";
     default:       return name as AudioCodec;
   }
 }

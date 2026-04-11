@@ -22,6 +22,8 @@
  * breaks libav's sibling-binary loading.
  */
 
+import { dbg } from "../../util/debug.js";
+
 export type LibavVariant = "webcodecs" | "default" | "avbridge";
 
 export interface LoadLibavOptions {
@@ -86,11 +88,21 @@ async function loadVariant(
   variant: LibavVariant,
   wantThreads: boolean,
 ): Promise<LibavInstance> {
+  return dbg.timed("libav-load", `load "${variant}" (threads=${wantThreads})`, 5000, () =>
+    loadVariantInner(variant, wantThreads),
+  );
+}
+
+async function loadVariantInner(
+  variant: LibavVariant,
+  wantThreads: boolean,
+): Promise<LibavInstance> {
   const key = cacheKey(variant, wantThreads);
   const base = `${libavBaseUrl()}/${variant}`;
   // The custom variant is named `libav-avbridge.mjs`; the npm variants follow
   // the same convention (`libav-webcodecs.mjs`, `libav-default.mjs`).
   const variantUrl = `${base}/libav-${variant}.mjs`;
+  dbg.info("libav-load", `fetching ${variantUrl}`);
 
   // Preflight HEAD-ish check: issue a bytes=0-0 range request so a missing
   // file fails fast with a clear error instead of hanging deep inside the

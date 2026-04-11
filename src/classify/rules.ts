@@ -25,8 +25,15 @@ const NATIVE_AUDIO_CODECS = new Set<AudioCodec>([
 /**
  * Codecs no major browser plays, period. These force the WASM fallback.
  */
-const FALLBACK_VIDEO_CODECS = new Set<VideoCodec>(["wmv3", "vc1", "mpeg4", "rv40", "mpeg2", "mpeg1", "theora"]);
-const FALLBACK_AUDIO_CODECS = new Set<AudioCodec>(["wmav2", "wmapro", "ac3", "eac3"]);
+const FALLBACK_VIDEO_CODECS = new Set<VideoCodec>([
+  "wmv3", "vc1", "mpeg4",
+  "rv10", "rv20", "rv30", "rv40",
+  "mpeg2", "mpeg1", "theora",
+]);
+const FALLBACK_AUDIO_CODECS = new Set<AudioCodec>([
+  "wmav2", "wmapro", "ac3", "eac3",
+  "cook", "ra_144", "ra_288", "sipr", "atrac3",
+]);
 
 /**
  * Containers `<video>` plays directly. Anything else with otherwise-supported

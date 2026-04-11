@@ -5,6 +5,7 @@ import { Diagnostics } from "./diagnostics.js";
 import { PluginRegistry } from "./plugins/registry.js";
 import { registerBuiltins } from "./plugins/builtin.js";
 import { discoverSidecars, attachSubtitleTracks, SubtitleResourceBag } from "./subtitles/index.js";
+import { dbg } from "./util/debug.js";
 import type {
   Classification,
   CreatePlayerOptions,
@@ -65,8 +66,14 @@ export class UnifiedPlayer {
   }
 
   private async bootstrap(): Promise<void> {
+    const bootstrapStart = performance.now();
     try {
-      const ctx = await probe(this.options.source);
+      dbg.info("bootstrap", "start");
+      const ctx = await dbg.timed("probe", "probe", 3000, () => probe(this.options.source));
+      dbg.info("probe",
+        `container=${ctx.container} video=${ctx.videoTracks[0]?.codec ?? "-"} ` +
+        `audio=${ctx.audioTracks[0]?.codec ?? "-"} probedBy=${ctx.probedBy}`,
+      );
       this.diag.recordProbe(ctx);
       this.mediaContext = ctx;
 
@@ -99,6 +106,10 @@ export class UnifiedPlayer {
       const decision = this.options.initialStrategy
         ? buildInitialDecision(this.options.initialStrategy, ctx)
         : classify(ctx);
+      dbg.info("classify",
+        `strategy=${decision.strategy} class=${decision.class} reason="${decision.reason}"` +
+        (decision.fallbackChain ? ` fallback=${decision.fallbackChain.join("→")}` : ""),
+      );
       this.classification = decision;
       this.diag.recordClassification(decision);
 
@@ -137,6 +148,16 @@ export class UnifiedPlayer {
       this.startTimeupdateLoop();
       this.options.target.addEventListener("ended", () => this.emitter.emit("ended", undefined));
       this.emitter.emitSticky("ready", undefined);
+      const bootstrapElapsed = performance.now() - bootstrapStart;
+      dbg.info("bootstrap", `ready in ${bootstrapElapsed.toFixed(0)}ms`);
+      if (bootstrapElapsed > 5000) {
+        // eslint-disable-next-line no-console
+        console.warn(
+          "[avbridge:bootstrap]",
+          `total bootstrap time ${bootstrapElapsed.toFixed(0)}ms — unusually slow. ` +
+          `Enable globalThis.AVBRIDGE_DEBUG for a per-phase breakdown.`,
+        );
+      }
     } catch (err) {
       const e = err instanceof Error ? err : new Error(String(err));
       this.diag.recordError(e);

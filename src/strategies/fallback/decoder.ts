@@ -135,6 +135,20 @@ export async function startDecoder(opts: StartDecoderOptions): Promise<DecoderHa
   let videoFramesDecoded = 0;
   let audioFramesDecoded = 0;
 
+  // Decode-rate watchdog. Samples framesDecoded every second and
+  // compares against realtime expected frames for the source fps. If
+  // the decoder sustains less than 60% of realtime for more than
+  // 5 seconds (counting only time since the first frame emerged),
+  // emits a one-shot diagnostic so users know why playback is
+  // stuttering instead of guessing. A second one-shot fires if the
+  // renderer's overflow-drop rate exceeds 10% of decoded frames —
+  // that symptom means the decoder is BURSTING faster than the
+  // renderer can drain, which is a different bug from "decoder slow".
+  let watchdogFirstFrameMs = 0;
+  let watchdogSlowSinceMs = 0;
+  let watchdogSlowWarned = false;
+  let watchdogOverflowWarned = false;
+
   // Synthetic timestamp counters. Reset on seek.
   let syntheticVideoUs = 0;
   let syntheticAudioUs = 0;
@@ -150,10 +164,18 @@ export async function startDecoder(opts: StartDecoderOptions): Promise<DecoderHa
       let readErr: number;
       let packets: Record<number, LibavPacket[]>;
       try {
-        // Smaller batch = fewer frames per decode round = less queue burst.
-        // 16 KB ≈ 4 video packets + ~12 audio packets at typical DivX
-        // bitrates. The renderer drains ~1 frame per 33ms rAF tick, so
-        // keeping bursts ≤ 4-6 frames prevents queue overflow.
+        // Batch size tunes the tradeoff between JS↔WASM call overhead
+        // (small = more crossings per second) and queue burstiness
+        // (large = decoder hands the renderer big bursts at once that
+        // can blow past the renderer's 64-frame hard cap before the
+        // per-batch `queueHighWater` throttle runs).
+        //
+        // We tried 64 KB and saw ~30% overflow drops on RMVB:rv40 at
+        // 1024x768 because one decode batch regularly produced >30
+        // frames. 16 KB keeps each batch ≈ 4-6 video packets at
+        // typical bitrates, so the worst-case queue spike stays under
+        // `queueHighWater` and the throttle has a chance to apply
+        // backpressure *between* batches rather than within one.
         [readErr, packets] = await libav.ff_read_frame_multi(fmt_ctx, readPkt, {
           limit: 16 * 1024,
         });
@@ -167,15 +189,81 @@ export async function startDecoder(opts: StartDecoderOptions): Promise<DecoderHa
       const videoPackets = videoStream ? packets[videoStream.index] : undefined;
       const audioPackets = audioStream ? packets[audioStream.index] : undefined;
 
-      if (videoDec && videoPackets && videoPackets.length > 0) {
-        await decodeVideoBatch(videoPackets, myToken);
-      }
-      if (myToken !== pumpToken || destroyed) return;
+      // Decode audio BEFORE video. On software-decode-bound content
+      // (rv40/mpeg4/wmv3 @ 720p+) a single video batch can take
+      // 200-400 ms of wall time; if the scheduler hasn't been fed
+      // during that window, audio output runs dry and the user hears
+      // clicks/gaps. Audio is time-critical; video can drop a frame
+      // and nobody notices. Audio decode is also typically <1 ms per
+      // packet for cook/mp3/aac, so doing it first barely delays
+      // video decoding at all.
       if (audioDec && audioPackets && audioPackets.length > 0) {
         await decodeAudioBatch(audioPackets, myToken);
       }
+      if (myToken !== pumpToken || destroyed) return;
+      if (videoDec && videoPackets && videoPackets.length > 0) {
+        await decodeVideoBatch(videoPackets, myToken);
+      }
 
       packetsRead += (videoPackets?.length ?? 0) + (audioPackets?.length ?? 0);
+
+      // ── Decode-rate watchdog ──────────────────────────────────────
+      if (videoFramesDecoded > 0) {
+        if (watchdogFirstFrameMs === 0) {
+          watchdogFirstFrameMs = performance.now();
+        }
+        const elapsedSinceFirst = (performance.now() - watchdogFirstFrameMs) / 1000;
+
+        // 1. Slow-decode detection (sustained <60% of realtime fps).
+        if (elapsedSinceFirst > 1 && !watchdogSlowWarned) {
+          const expectedFrames = elapsedSinceFirst * videoFps;
+          const ratio = videoFramesDecoded / expectedFrames;
+          if (ratio < 0.6) {
+            if (watchdogSlowSinceMs === 0) watchdogSlowSinceMs = performance.now();
+            if ((performance.now() - watchdogSlowSinceMs) / 1000 > 5) {
+              watchdogSlowWarned = true;
+              console.warn(
+                "[avbridge:decode-rate]",
+                `decoder is running slower than realtime: ` +
+                `${videoFramesDecoded} frames in ${elapsedSinceFirst.toFixed(1)}s ` +
+                `(${(videoFramesDecoded / elapsedSinceFirst).toFixed(1)} fps vs ${videoFps} fps source — ` +
+                `${(ratio * 100).toFixed(0)}% of realtime). ` +
+                `Playback will stutter. Typical causes: software decode of a codec with no WebCodecs support ` +
+                `(rv40, mpeg4 @ 720p+, wmv3), or a resolution too large for single-threaded WASM to keep up with.`,
+              );
+            }
+          } else {
+            watchdogSlowSinceMs = 0;
+          }
+        }
+
+        // 2. Overflow-drop detection (>10% of decoded frames dropped
+        //    by the renderer's hard cap). This means the decoder
+        //    produces BURSTS — it's fast enough on average but one
+        //    batch delivers >30 frames at a time, overflowing before
+        //    the queueHighWater throttle can apply backpressure.
+        //    Symptom is different from "decoder slow": here the fps
+        //    ratio looks fine but the user sees choppy playback.
+        if (
+          !watchdogOverflowWarned &&
+          videoFramesDecoded > 100 // wait for a meaningful sample
+        ) {
+          const rendererStats = opts.renderer.stats() as { framesDroppedOverflow?: number };
+          const overflow = rendererStats.framesDroppedOverflow ?? 0;
+          if (overflow / videoFramesDecoded > 0.1) {
+            watchdogOverflowWarned = true;
+            console.warn(
+              "[avbridge:overflow-drop]",
+              `renderer is dropping ${overflow}/${videoFramesDecoded} frames ` +
+              `(${((overflow / videoFramesDecoded) * 100).toFixed(0)}%) because the decoder ` +
+              `is producing bursts faster than the canvas can drain. Symptom: choppy ` +
+              `playback despite decoder keeping up on average. Fix would be smaller ` +
+              `read batches in the pump loop or a lower queueHighWater cap — see ` +
+              `src/strategies/fallback/decoder.ts.`,
+            );
+          }
+        }
+      }
 
       // Throttle: don't run too far ahead of playback. Two backpressure
       // signals:

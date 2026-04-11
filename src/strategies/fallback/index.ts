@@ -2,6 +2,7 @@ import type { MediaContext, PlaybackSession } from "../../types.js";
 import { VideoRenderer } from "./video-renderer.js";
 import { AudioOutput } from "./audio-output.js";
 import { startDecoder, type DecoderHandles } from "./decoder.js";
+import { dbg } from "../../util/debug.js";
 
 /**
  * Fallback strategy session.
@@ -30,8 +31,27 @@ import { startDecoder, type DecoderHandles } from "./decoder.js";
  * seek(t)` — none of the buffering choreography leaks out.
  */
 
-const READY_AUDIO_BUFFER_SECONDS = 0.3;
-const READY_TIMEOUT_SECONDS = 10;
+// Gate for cold-start playback. We want to start playing as soon as
+// there's any decoded output — the decoder will keep pumping during
+// playback, so more-is-better buffering only helps for fast decoders.
+//
+// For software-decode-bound content (rv40 / wmv3 / mpeg4 @ 720p+ on
+// single-threaded WASM), the decoder may run *slower* than realtime.
+// Waiting for a large audio-buffer threshold is actively wrong in that
+// case: it will never be reached, so the old gate would sit out its
+// full 10-second timeout before playing anything. An aggressive gate
+// ships the first frame to the screen fast, at the cost of the audio
+// clock racing a little ahead of video in the first few seconds —
+// which is the same situation we'd have been in after the timeout
+// anyway.
+//
+// READY_AUDIO_BUFFER_SECONDS: minimum audio queued before start. Set
+// low enough that a slow decoder still reaches it before the user
+// loses patience; 40 ms ≈ 2 cook packets or ~2 AAC packets.
+// READY_TIMEOUT_SECONDS: hard safety. If even 40 ms of audio can't be
+// produced in 3 s, give up and play whatever we have.
+const READY_AUDIO_BUFFER_SECONDS = 0.04;
+const READY_TIMEOUT_SECONDS = 3;
 
 export async function createFallbackSession(
   ctx: MediaContext,
@@ -86,16 +106,80 @@ export async function createFallbackSession(
    * playback smoothly. Returns early on timeout so we don't hang forever
    * if the decoder is producing nothing (e.g. immediately past EOF after
    * a seek to the end).
+   *
+   * The gate has three exit paths in order of preference:
+   *
+   *   1. **Fully ready** — audio buffer ≥ target AND ≥1 video frame.
+   *      The happy path for fast decoders (native + remux never reach
+   *      this function; this is fallback only).
+   *
+   *   2. **Video-ready, audio grace period elapsed** — we have video
+   *      frames but the audio scheduler is still empty. RM/AVI
+   *      containers commonly deliver a video GOP before their first
+   *      audio packet, so "no audio yet" ≠ "no audio coming". We give
+   *      the demuxer a 500 ms grace window from first-frame, then
+   *      start regardless. Audio will be scheduled at its correct
+   *      media time once its packets arrive.
+   *
+   *   3. **Hard timeout** — after {@link READY_TIMEOUT_SECONDS} seconds
+   *      with neither condition met, start anyway and emit an
+   *      unconditional diagnostic so the specific underflow is visible.
+   *
+   * Path #2 is what fixed the "RMVB sits on the play button for 10 s
+   * with audio=0ms, frames=N" case — the gate was waiting on audio
+   * packets that were several seconds behind in the file stream, and
+   * the timeout was the only way out.
    */
   async function waitForBuffer(): Promise<void> {
     const start = performance.now();
+    let firstFrameAtMs = 0;
+    dbg.info("cold-start",
+      `gate entry: want audio ≥ ${READY_AUDIO_BUFFER_SECONDS * 1000}ms + 1 frame`,
+    );
     while (true) {
-      const audioReady = audio.isNoAudio() || audio.bufferAhead() >= READY_AUDIO_BUFFER_SECONDS;
-      if (audioReady && renderer.hasFrames()) {
+      const audioAhead = audio.isNoAudio() ? Infinity : audio.bufferAhead();
+      const audioReady = audio.isNoAudio() || audioAhead >= READY_AUDIO_BUFFER_SECONDS;
+      const hasFrames = renderer.hasFrames();
+      const nowMs = performance.now();
+
+      if (hasFrames && firstFrameAtMs === 0) firstFrameAtMs = nowMs;
+
+      // Happy path: both ready.
+      if (audioReady && hasFrames) {
+        dbg.info("cold-start",
+          `gate satisfied in ${(nowMs - start).toFixed(0)}ms ` +
+          `(audio=${(audioAhead * 1000).toFixed(0)}ms, frames=${renderer.queueDepth()})`,
+        );
         return;
       }
-      if ((performance.now() - start) / 1000 > READY_TIMEOUT_SECONDS) {
-        // Give up waiting; play whatever we have.
+
+      // Grace path: have video, still waiting for audio that's
+      // on its way (first 500 ms after first-frame).
+      if (
+        hasFrames &&
+        firstFrameAtMs > 0 &&
+        nowMs - firstFrameAtMs >= 500
+      ) {
+        dbg.info("cold-start",
+          `gate released on video-only grace at ${(nowMs - start).toFixed(0)}ms ` +
+          `(frames=${renderer.queueDepth()}, audio=${(audioAhead * 1000).toFixed(0)}ms — ` +
+          `demuxer hasn't delivered audio packets yet, starting anyway and letting ` +
+          `the audio scheduler catch up at its media-time anchor)`,
+        );
+        return;
+      }
+
+      // Hard timeout.
+      if ((nowMs - start) / 1000 > READY_TIMEOUT_SECONDS) {
+        dbg.diag("cold-start",
+          `gate TIMEOUT after ${READY_TIMEOUT_SECONDS}s — ` +
+          `audio=${(audioAhead * 1000).toFixed(0)}ms ` +
+          `(needed ${READY_AUDIO_BUFFER_SECONDS * 1000}ms), ` +
+          `frames=${renderer.queueDepth()} (needed ≥1). ` +
+          `Decoder produced nothing in ${READY_TIMEOUT_SECONDS}s — either a corrupt source, ` +
+          `a missing codec, or WASM is catastrophically slow on this file. ` +
+          `Check getDiagnostics().runtime for decode counters.`,
+        );
         return;
       }
       await new Promise((r) => setTimeout(r, 50));

@@ -23,6 +23,7 @@ export type ContainerKind =
   | "avi"
   | "asf"
   | "flv"
+  | "rm" // RealMedia (.rm / .rmvb)
   | "ogg"
   | "wav"
   | "mp3"
@@ -41,7 +42,10 @@ export type VideoCodec =
   | "mpeg4" // MPEG-4 Part 2 (DivX/Xvid)
   | "wmv3"
   | "vc1"
-  | "rv40"
+  | "rv10" // RealVideo 1.0 (H.263-like)
+  | "rv20" // RealVideo G2
+  | "rv30" // RealVideo 8
+  | "rv40" // RealVideo 9/10
   | "mpeg2"
   | "mpeg1"
   | "theora"
@@ -60,6 +64,11 @@ export type AudioCodec =
   | "wmav2"
   | "wmapro"
   | "alac"
+  | "cook" // RealAudio Cooker (G2/RealAudio 8)
+  | "ra_144" // RealAudio 1.0 (14.4 kbps)
+  | "ra_288" // RealAudio 2.0 (28.8 kbps)
+  | "sipr" // RealAudio Sipr (voice codec)
+  | "atrac3" // Sony ATRAC3 (sometimes seen in .rm)
   | (string & {});
 
 export interface VideoTrackInfo {

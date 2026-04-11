@@ -4,6 +4,99 @@ All notable changes to **avbridge** are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.0]
+
+### Added
+
+- **RealMedia playback support** (`.rm`, `.rmvb`). The custom `avbridge`
+  libav variant now includes the `rm` demuxer and every RealVideo /
+  RealAudio decoder family:
+  - Video: `rv10`, `rv20`, `rv30`, `rv40`
+  - Audio: `cook`, `ra_144`, `ra_288`, `sipr`, `atrac3`
+  These codecs have no browser decoder, so classification routes them
+  to the fallback WASM strategy. The custom variant grows by a few
+  hundred KB of WASM; the webcodecs variant is unchanged.
+- **Sniff layer recognizes `.RMF` magic bytes** and returns the new
+  `"rm"` `ContainerKind`. Probing for a `.rm` or `.rmvb` file goes
+  through libav directly (mediabunny doesn't handle RealMedia).
+- **File-picker accept list** in `demo/index.html` and
+  `demo/convert.html` now includes `.rm` and `.rmvb`.
+
+### Changed
+
+- **`VideoCodec`** gained `rv10`, `rv20`, `rv30` (existing `rv40` kept).
+- **`AudioCodec`** gained `cook`, `ra_144`, `ra_288`, `sipr`, `atrac3`.
+- **`ContainerKind`** gained `rm`.
+- **Classifier** (`src/classify/rules.ts`) — all new RV/RA codecs added
+  to `FALLBACK_VIDEO_CODECS` / `FALLBACK_AUDIO_CODECS`.
+
+### Fallback strategy performance tuning
+
+These are general-purpose improvements motivated by RealMedia testing
+but also benefit MPEG-4 Part 2 (DivX/Xvid), WMV3, and other
+software-decoded content:
+
+- **Cold-start pre-roll gate lowered 300 ms → 40 ms, timeout 10 s → 3 s.**
+  The gate used to wait for 300 ms of buffered audio before starting
+  playback. On software-decode-bound content (rv40, mpeg4 @ 720p+),
+  the decoder produces output slower than realtime, so 300 ms is
+  unreachable — the gate would sit out its 10 s timeout before the
+  first frame appeared, which the user experienced as a silent 10-
+  second hang after clicking Play. The gate now starts on 40 ms
+  audio + first frame, and the safety timeout is 3 s. A diagnostic
+  warning fires loudly if the timeout is ever hit.
+- **Decoder read batch size raised 16 KB → 64 KB.** Fewer JS↔WASM
+  `ff_read_frame_multi` / `ff_decode_multi` round trips per unit of
+  video, which measurably speeds up software decode on slow devices.
+  Queue burstiness is unchanged because the existing
+  `queueHighWater = 30` backpressure still applies.
+
+### Debug + self-diagnosis layer
+
+New: **`src/util/debug.ts`** — a runtime-toggleable verbose logging
+channel, plus unconditional warnings for suspicious conditions. The
+goal is that subtle issues self-identify in the console instead of
+requiring 10 minutes of reading diagnostics JSON.
+
+- Set `globalThis.AVBRIDGE_DEBUG = true` (or append `?avbridge_debug`
+  to a demo page URL) to enable verbose logging. Every log is
+  prefixed `[avbridge:<tag>]` so you can filter.
+- When debug is **off**, the following conditions still emit an
+  unconditional `console.warn`:
+  - **`[avbridge:cold-start] gate TIMEOUT…`** — the fallback
+    strategy's `waitForBuffer` hit its 3 s timeout with a
+    specific underflow (e.g. "audio=0 ms, frames=0"). This used to
+    silently hang playback for 10 seconds.
+  - **`[avbridge:decode-rate] decoder is running slower than
+    realtime…`** — watchdog in the fallback pump loop; fires once
+    per stall when framesDecoded/s stays below 60% of source fps
+    for ≥5 s after the first frame. Tells you the exact fps
+    ratio and names the likely cause.
+  - **`[avbridge:bootstrap] total bootstrap time <N>ms — unusually
+    slow…`** — bootstrap took >5 s end-to-end.
+  - **`[avbridge:probe] probe took <N>ms (>3000ms expected)…`** —
+    slow probe (usually a slow Range request or libav cold-start).
+  - **`[avbridge:libav-load] load "<variant>" took <N>ms
+    (>5000ms expected)…`** — slow WASM download or wrong base
+    path.
+
+### Known limitations
+
+- **rv40 / rv30 at 720p+ may still stutter** on modest CPUs. Single-
+  threaded WASM software decode of RealVideo's motion compensation is
+  fundamentally slower than realtime on many files. libav.js pthreads
+  and a WebGL YUV→RGBA upload path are both plausible follow-ups but
+  not in 2.2.0. For reference: a 1024×768 rv40 file plays at roughly
+  0.5-2× realtime on an M-series Mac depending on the bitrate. The
+  new `[avbridge:decode-rate]` watchdog flags this condition in the
+  console so the symptom is never a silent stutter.
+
+### Tests
+
+- New sniff test for `.RMF` magic bytes (`tests/sniff.test.ts`).
+- Two new classify tests for RealMedia routing (rv40+cook, rv30+ra_288).
+- Test count: 115 → **118**.
+
 ## [2.1.2]
 
 ### Fixed

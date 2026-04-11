@@ -32,6 +32,11 @@ describe("sniffContainer", () => {
     expect(await sniffContainer(blob(head))).toBe("asf");
   });
 
+  it("detects RealMedia from .RMF signature", async () => {
+    const head = [0x2e, 0x52, 0x4d, 0x46];
+    expect(await sniffContainer(blob(head))).toBe("rm");
+  });
+
   it("returns unknown for garbage", async () => {
     expect(await sniffContainer(blob([1, 2, 3, 4]))).toBe("unknown");
   });

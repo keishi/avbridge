@@ -215,6 +215,10 @@ export function sniffContainerFromBytes(head: Uint8Array): ContainerKind {
   ) return "asf";
   // FLV: 46 4C 56
   if (head[0] === 0x46 && head[1] === 0x4c && head[2] === 0x56) return "flv";
+  // RealMedia (.rm / .rmvb): ".RMF" — 2E 52 4D 46
+  if (head[0] === 0x2e && head[1] === 0x52 && head[2] === 0x4d && head[3] === 0x46) {
+    return "rm";
+  }
   // OggS: 4F 67 67 53
   if (head[0] === 0x4f && head[1] === 0x67 && head[2] === 0x67 && head[3] === 0x53) return "ogg";
   // FLAC: 66 4C 61 43

@@ -197,6 +197,31 @@ describe("classify", () => {
     expect(mediabunnyAudioToAvbridge(undefined)).toBe("unknown");
   });
 
+  it("routes RealMedia rv40 + cook to fallback", () => {
+    const c = classify(
+      ctx({
+        container: "rm",
+        videoTracks: [{ id: 0, codec: "rv40", width: 640, height: 480 }],
+        audioTracks: [{ id: 1, codec: "cook", channels: 2, sampleRate: 44100 }],
+      }),
+    );
+    expect(c.strategy).toBe("fallback");
+    expect(c.class).toBe("FALLBACK_REQUIRED");
+    expect(c.reason).toContain("rv40");
+  });
+
+  it("routes RealMedia rv30 + ra_288 to fallback", () => {
+    const c = classify(
+      ctx({
+        container: "rm",
+        videoTracks: [{ id: 0, codec: "rv30", width: 320, height: 240 }],
+        audioTracks: [{ id: 1, codec: "ra_288", channels: 1, sampleRate: 22050 }],
+      }),
+    );
+    expect(c.strategy).toBe("fallback");
+    expect(c.reason).toContain("rv30");
+  });
+
   it("flags Hi10P with fallbackChain", () => {
     const c = classify(
       ctx({

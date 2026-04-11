@@ -172,9 +172,31 @@ export class AudioOutput implements ClockSource {
     node.connect(this.gain);
 
     // Convert media time → ctx time using the anchor.
-    const ctxStart = this.ctxTimeAtAnchor + (this.mediaTimeOfNext - this.mediaTimeOfAnchor);
-    const safeStart = Math.max(ctxStart, this.ctx.currentTime);
-    node.start(safeStart);
+    let ctxStart = this.ctxTimeAtAnchor + (this.mediaTimeOfNext - this.mediaTimeOfAnchor);
+
+    // When the decoder is slower than realtime, `ctxStart` falls into
+    // the past (ctx.currentTime has already passed it). Clamping each
+    // sample to `ctx.currentTime` individually (the old behavior)
+    // caused every stale sample in a burst to start at *the same
+    // instant*, stacking them on top of each other — the audible
+    // symptom was a series of clicks / a chord of stuttering cook
+    // packets.
+    //
+    // Correct behavior: when the first sample of a burst is behind,
+    // *rebase the anchor forward* so ctxStart = ctx.currentTime now.
+    // Subsequent samples in the same burst then schedule at
+    // ctxStart + offset as usual, laying out sequentially on the
+    // timeline instead of piling up. The downside is a visible jump
+    // in the audio clock — but the alternative was silent corruption.
+    // `now()` readers (the video renderer) just see the clock step
+    // forward and drop any frames older than the new time.
+    if (ctxStart < this.ctx.currentTime) {
+      this.ctxTimeAtAnchor = this.ctx.currentTime;
+      this.mediaTimeOfAnchor = this.mediaTimeOfNext;
+      ctxStart = this.ctx.currentTime;
+    }
+
+    node.start(ctxStart);
 
     this.mediaTimeOfNext += frameCount / sampleRate;
     this.framesScheduled++;

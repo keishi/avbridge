@@ -33,7 +33,10 @@ LIBAV_DIR="$CACHE/libav.js"
 LIBAV_VERSION="6.8.8.0"
 LIBAV_TAG="v${LIBAV_VERSION}"
 VARIANT_NAME="avbridge"
-VENDOR_DIR="$REPO_ROOT/vendor/libav"
+# 2.1.0+ nested layout: each variant lives under vendor/libav/<variant>/
+# so the libav loader's `new URL("../vendor/libav", import.meta.url) +
+# /<variant>/libav-<variant>.mjs` path resolves cleanly.
+VENDOR_DIR="$REPO_ROOT/vendor/libav/avbridge"
 
 # Compiler optimization flags. The libav.js Makefile defaults to OPTFLAGS=-Oz
 # (optimize for *size*), which produces small binaries with the slowest C
@@ -64,6 +67,7 @@ read -r -d '' VARIANT_FRAGMENTS <<'EOF' || true
   "demuxer-ogg",
   "demuxer-wav",
   "demuxer-aac",
+  "demuxer-rm",
 
   "parser-h264",
   "parser-hevc",
@@ -85,6 +89,10 @@ read -r -d '' VARIANT_FRAGMENTS <<'EOF' || true
   "decoder-vc1",
   "decoder-mpeg2video",
   "decoder-mpeg1video",
+  "decoder-rv10",
+  "decoder-rv20",
+  "decoder-rv30",
+  "decoder-rv40",
 
   "decoder-aac",
   "decoder-mp3",
@@ -93,6 +101,11 @@ read -r -d '' VARIANT_FRAGMENTS <<'EOF' || true
   "decoder-wmav1",
   "decoder-wmav2",
   "decoder-wmapro",
+  "decoder-cook",
+  "decoder-ra_144",
+  "decoder-ra_288",
+  "decoder-sipr",
+  "decoder-atrac3",
 
   "bsf-mpeg4_unpack_bframes"
 ]
@@ -103,6 +116,11 @@ log() { echo "[build-libav] $*"; }
 log "cache directory: $CACHE"
 log "vendor target:   $VENDOR_DIR"
 mkdir -p "$CACHE" "$VENDOR_DIR"
+
+# The outdated "Next steps" footer used to tell users to run `npm run
+# predemo` after building. That step was removed in 2.1.2 when the demo
+# started serving libav via a Vite middleware plugin directly from
+# `vendor/libav/`, so there's nothing to copy.
 
 if [ "${AVBRIDGE_LIBAV_CLEAN:-0}" = "1" ]; then
   log "AVBRIDGE_LIBAV_CLEAN=1 — wiping cached emsdk + libav.js trees"
@@ -234,8 +252,10 @@ ls -lh "$VENDOR_DIR" | sed 's/^/[build-libav]   /'
 
 log ""
 log "Next steps:"
-log "  1. Run \`npm run predemo\` to copy the variant into demo/public/libav/avbridge/"
-log "  2. Run \`npm run demo\` and try a legacy file"
+log "  1. Run \`npm run build\` to rebuild the tsup output with fresh libav"
+log "     binaries baked into the package tarball."
+log "  2. Run \`npm run demo\` to try the new variant in the browser (Vite's"
+log "     serveVendorLibav plugin serves this directory directly at /libav/)."
 log ""
-log "The loader at src/strategies/fallback/libav-loader.ts will pick up the"
-log "avbridge variant automatically — see the 'avbridge' branch in loadVariant()."
+log "The loader at src/strategies/fallback/libav-loader.ts picks up the"
+log "avbridge variant automatically — see loadVariant() in that file."
