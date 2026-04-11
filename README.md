@@ -8,9 +8,10 @@
 > **Play and convert arbitrary video files in the browser. Local files or remote URLs.**
 
 A media compatibility layer for the web. Drop in any file — MP4, MKV, AVI,
-WMV, FLV, MPEG-TS, DivX — and avbridge picks the best path: native `<video>`
-playback, mediabunny remux to fragmented MP4, libav.js demux + WebCodecs
-hardware decode, or full WASM software decode. Same API for all of them.
+WMV, FLV, MPEG-TS, DivX, RMVB — and avbridge picks the best path: native
+`<video>` playback, mediabunny remux to fragmented MP4, libav.js demux +
+WebCodecs hardware decode, or full WASM software decode. Same API for all
+of them.
 
 **Streaming-first.** Remote URLs are read via HTTP Range requests across all
 strategies — even AVI/WMV/FLV — so a 4 GB file plays without buffering 4 GB
@@ -46,6 +47,7 @@ MKV (H.264/AAC)  → remux     → fragmented MP4 via MSE
 MPEG-TS (H.264)  → remux     → fragmented MP4 via MSE
 AVI (H.264)      → hybrid    → libav demux + hardware decode
 AVI (DivX)       → fallback  → smooth software decode
+RMVB (rv40/cook) → fallback  → libav software decode
 ```
 
 ## Quick start
@@ -246,9 +248,45 @@ player.getDiagnostics();
 //   reason: "avi container requires libav demux; codecs are hardware-decodable",
 //   width: 1920, height: 1080, duration: 5400,
 //   probedBy: "libav",
+//   transport: "http-range",
+//   rangeSupported: true,
+//   runtime: { decoderType: "webcodecs-hybrid", videoFramesDecoded: 5432, ... },
 //   strategyHistory: [{ strategy: "hybrid", reason: "...", at: 1712764800000 }]
 // }
 ```
+
+### Debug logging
+
+Enable verbose per-stage logging for hard-to-diagnose issues:
+
+```js
+// In the browser console, or before avbridge loads:
+globalThis.AVBRIDGE_DEBUG = true;
+```
+
+The demo pages also accept `?avbridge_debug` in the URL. When enabled,
+every decision point emits a `[avbridge:<tag>]` log covering probe,
+classify, libav load, bootstrap, strategy execute, and cold-start gate
+timings.
+
+The following **unconditional diagnostics** also fire — even without the
+flag — when something smells off:
+
+- `[avbridge:bootstrap]` — bootstrap chain took >5 s end-to-end
+- `[avbridge:probe]` — probe took >3 s
+- `[avbridge:libav-load]` — libav variant load took >5 s (usually a
+  misconfigured base path or server MIME type)
+- `[avbridge:cold-start]` — fallback cold-start gate timed out or
+  released on video-only grace after waiting for audio
+- `[avbridge:decode-rate]` — fallback decoder is running under 60% of
+  realtime fps for more than 5 seconds (one-shot per session)
+- `[avbridge:overflow-drop]` — renderer is dropping more than 10% of
+  decoded frames because the decoder is bursting faster than the
+  canvas can drain (one-shot per session)
+
+These are designed so "it works on my machine but stutters on your
+file" surfaces the specific reason in the console instead of requiring
+a live debug session.
 
 ## Install
 
@@ -256,97 +294,86 @@ player.getDiagnostics();
 npm install avbridge
 ```
 
-This gives you the **core package**: probe, classify, native playback, remux,
-transcode, and subtitles. No WASM. The full library is ~17 KB gzipped, but
-tree-shaking is aggressive — what you actually pay for depends on which
-exports you import:
+That's it. **No optional peers to install, no binaries to build, no static
+file path to configure.** Both libav.js variants (the 5 MB webcodecs build
+and the 6.5 MB custom avbridge build with AVI/WMV/DivX/rv40 decoders) ship
+inside the tarball under `node_modules/avbridge/vendor/libav/` and are
+lazy-loaded at runtime only if a file actually needs them.
+
+Packed tarball is **~4 MB**, unpacked **~15 MB** (mostly the two WASM
+binaries). If you only ever play native MP4, you never download a single
+byte of the libav WASM — the loader is behind a dynamic `import()` that
+never fires.
+
+### Two ways to consume
+
+**Bundler (Vite, webpack, Rollup, esbuild):**
+
+```ts
+import { createPlayer, remux, transcode, probe, classify } from "avbridge";
+// or
+import "avbridge/element";  // registers <avbridge-video> custom element
+```
+
+The tree-shaking budgets below apply to this path. Your bundler resolves
+`mediabunny` and `libavjs-webcodecs-bridge` through normal dependency
+resolution. libav.js binaries live at
+`node_modules/avbridge/vendor/libav/` — the loader finds them
+automatically via `import.meta.url` in the generated chunk.
+
+**Plain `<script type="module">` (no bundler):**
+
+```html
+<script type="module"
+        src="/node_modules/avbridge/dist/element-browser.js"></script>
+
+<avbridge-video src="/video.mkv" autoplay playsinline></avbridge-video>
+```
+
+This is a second tsup entry (`dist/element-browser.js`) that inlines
+mediabunny + libavjs-webcodecs-bridge into a single ~1.3 MB file with
+zero bare specifiers at runtime. Perfect for self-hosted tools or static
+sites that don't want a build step. It loads libav.js from the same
+co-located `vendor/libav/` tree.
+
+### Bundle sizes (bundler path)
 
 | Import | Eager (gzip) |
 |---|---|
 | `srtToVtt` | **0.5 KB** |
-| `probe`, `classify` | **3 KB** |
-| `transcode` | **3.3 KB** |
-| `remux` | **4.1 KB** |
-| `createPlayer` | **14 KB** |
-| `*` (everything) | **17 KB** |
+| `probe`, `classify` | **2.5 KB** |
+| `transcode` | **3 KB** |
+| `remux` | **3.7 KB** |
+| `createPlayer` | **15 KB** |
+| `*` (everything) | **17.5 KB** |
+| `avbridge/element` | **17 KB** |
 
-The libav-loader path is split into a lazy chunk (~5 KB extra) that only
-loads when a consumer actually invokes the AVI/ASF/FLV remux path.
+Run `npm run audit:bundle` to verify in your fork.
 
-Run `npm run audit:bundle` to verify these numbers in your fork.
+### Overriding the libav path (advanced)
 
-### Optional: fallback / hybrid strategies
+If you want to host the libav binaries somewhere other than
+`node_modules/avbridge/vendor/libav/` — for example a CDN, a custom
+libav build, or a patched version — set `AVBRIDGE_LIBAV_BASE` **before**
+any avbridge code runs:
 
-For files that need software decode or libav.js demux (AVI, WMV, FLV,
-legacy codecs):
-
-```bash
-npm install @libav.js/variant-webcodecs libavjs-webcodecs-bridge
+```html
+<script>globalThis.AVBRIDGE_LIBAV_BASE = "https://cdn.example.com/libav";</script>
+<script type="module" src="..."></script>
 ```
 
-This handles MKV/WebM/MP4 containers via the hybrid/fallback strategies.
-
-### Optional: AVI, WMV3, DivX, and other legacy formats
-
-For **AVI, WMV3, MPEG-4 Part 2, DivX**, and other legacy formats, you need
-a custom libav.js build — see [`vendor/libav/README.md`](./vendor/libav/README.md)
-for the build recipe.
-
-### Package boundary summary
-
-| What you need | What to install |
-|---|---|
-| Playback of MP4/MKV/WebM/**MPEG-TS** + remux/transcode export | `avbridge` (core, no WASM) |
-| Fallback/hybrid decode for modern codecs in legacy containers (AVI/ASF/FLV) | + `@libav.js/variant-webcodecs` + `libavjs-webcodecs-bridge` |
-| AVI, WMV3, DivX, MPEG-4 Part 2, VC-1 | + custom libav build (`scripts/build-libav.sh`) |
-
-### Serving the libav.js binaries
-
-The optional libav variants ship as `.wasm` + `.mjs` files that need to be
-served by your app at a known URL. avbridge looks for them at
-`/libav/<variant>/libav-<variant>.mjs` (where `<variant>` is `webcodecs` or
-`avbridge`). You can override the base URL with
-`globalThis.AVBRIDGE_LIBAV_BASE = "/my-static-path"` before any avbridge
-code runs.
-
-#### Vite
-
-Copy the variant binaries into your `public/libav/` directory at build
-time. The avbridge demo does this via `scripts/copy-libav.mjs`:
-
-```bash
-# In your project, after npm install:
-mkdir -p public/libav/webcodecs
-cp node_modules/@libav.js/variant-webcodecs/dist/* public/libav/webcodecs/
-```
-
-For the custom `avbridge` variant, after running `./scripts/build-libav.sh`
-in the avbridge repo, copy `vendor/libav/*` into `public/libav/avbridge/`.
-
-#### Webpack
-
-Use `copy-webpack-plugin` to ship the binaries to your output directory at
-the same `libav/<variant>/` path.
-
-#### Plain `<script>` / no bundler
-
-Drop the variant directory anywhere on your origin and set
-`globalThis.AVBRIDGE_LIBAV_BASE` to the matching URL before importing
-avbridge.
-
-If a libav-backed strategy is selected and the binary isn't reachable,
-avbridge throws a clear error mentioning the URL it tried to load. The
-core (native + remux for modern containers) doesn't need any of this.
+The loader will then fetch `<base>/<variant>/libav-<variant>.mjs` and its
+sibling `.wasm` files. This is the documented replaceability hook for
+LGPL compliance — see [`NOTICE.md`](./NOTICE.md) and
+[`THIRD_PARTY_LICENSES.md`](./THIRD_PARTY_LICENSES.md).
 
 ## Known limitations
 
-- The **fallback strategy** uses WASM software decoding and is CPU-intensive, especially for HD video on mobile devices.
-- **Remux of AVI/ASF/FLV** requires libav.js — the core package cannot demux these containers.
+- The **fallback strategy** uses WASM software decoding and is CPU-intensive, especially for HD video on mobile devices. The `[avbridge:decode-rate]` diagnostic fires if the decoder falls below 60% of realtime so you know that's what's happening. Codecs with no WebCodecs support (rv40, mpeg4 @ 720p+, wmv3, vc1 at high resolutions) are the usual suspects.
 - **Remote URL playback requires HTTP Range requests.** Servers that don't support `Range: bytes=...` will fail fast with a clear error rather than silently downloading the whole file. This applies to all strategies.
 - **H.264 + MP3 in MP4** is a best-effort combination that may produce playback issues in some browsers. Use `strict: true` to reject it, or re-encode audio to AAC via `transcode()`.
-- AVI files with **packed B-frames** (some DivX encodes) may have timing issues until the `mpeg4_unpack_bframes` BSF is wired in.
-- libav.js **threading is disabled** due to bugs in v6.8.8 — decode runs single-threaded with SIMD acceleration.
-- `transcode()` v1 only accepts mediabunny-readable inputs (MP4/MKV/WebM/OGG/MOV/MP3/FLAC/WAV). AVI/ASF/FLV transcoding is planned for v1.1.
+- libav.js **threading is disabled** due to known runtime bugs in the v6.8.8 pthreads build — decode runs single-threaded with WASM SIMD acceleration.
+- `transcode()` only accepts mediabunny-readable inputs (MP4/MKV/WebM/OGG/MOV/MP3/FLAC/WAV). AVI/ASF/FLV/RM transcoding means "play it first, record the output" — not yet plumbed.
 - `transcode()` uses **WebCodecs encoders only** — codec availability depends on the browser. AV1 encoding is not yet universal.
 - For the **hybrid and fallback strategies**, `<avbridge-video>.buffered` returns an empty `TimeRanges` because the canvas-based renderers don't track buffered ranges yet. Native and remux strategies expose the full `<video>.buffered` set as expected.
 
