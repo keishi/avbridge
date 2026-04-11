@@ -4,6 +4,51 @@ All notable changes to **avbridge** are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.1]
+
+### Fixed
+
+- **Canvas renderer no longer stretches non-stage-aspect video.** The
+  fallback + hybrid renderer's canvas sat at `width:100%;height:100%`
+  with no `object-fit`, so portrait or otherwise non-matching content
+  was stretched to fill the stage. Now uses `object-fit: contain` to
+  letterbox the bitmap inside the stage.
+- **Strategy switch to `remux` while playing now resumes playback.**
+  `doSetStrategy` calls `session.seek()` before `session.play()`, so
+  the remux pipeline used to start with `pendingAutoPlay=false`; the
+  subsequent `video.play()` would then hit an element whose `src`
+  wasn't yet assigned (the MseSink constructs lazily on first write)
+  and silently reject. `RemuxPipeline` gained `setAutoPlay()` so
+  `session.play()` can flip `pendingAutoPlay=true` mid-flight; the
+  MseSink fires `video.play()` as soon as buffered data lands.
+- **Strategy switch from `hybrid` / `fallback` to another backend now
+  preserves play state.** Those strategies hide the `<video>` and
+  drive playback from their own Web Audio clock, so the underlying
+  element's native `paused` was always `true`. `doSetStrategy` read
+  `!target.paused` and captured `wasPlaying=false`, skipping the
+  restore on the new session. Both strategies now patch a
+  configurable `paused` getter on the target that mirrors
+  `audio.isPlaying()`, and clean it up on `destroy()`.
+- **`initialStrategy` no longer retries the same failing strategy.**
+  `buildInitialDecision` inherited `natural.fallbackChain` verbatim,
+  so for a `RISKY_NATIVE` file with `initialStrategy: "remux"` the
+  chain still contained `"remux"` — on failure, `startSession` would
+  shift it off and retry `remux` before escalating. The synthetic
+  decision now filters `initial` out of the inherited chain.
+- **`UnifiedPlayer.destroy()` removes the `ended` listener it
+  attached during `bootstrap()`.** Previously the anonymous handler
+  leaked across player lifecycles on long-lived target elements
+  (e.g. `<avbridge-video>` swapping source), causing gradual
+  accumulation and duplicate `ended` events after source reloads.
+
+### Changed
+
+- Bundle audit ceiling for the `element-only` scenario raised to
+  20 KB eager gzip. The budget's purpose is catching
+  order-of-magnitude regressions (e.g. libav accidentally eager-
+  imported), not policing ±200 bytes; realistic first-play cost is
+  dominated by the multi-megabyte lazy wasm load.
+
 ## [2.2.0]
 
 ### Added

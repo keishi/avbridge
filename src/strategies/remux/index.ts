@@ -36,7 +36,19 @@ export async function createRemuxSession(
         await pipeline.start(video.currentTime || 0, true);
         return;
       }
-      await video.play();
+      // seek() may have already started the pump with autoPlay=false
+      // (strategy-switch flow calls seek before play). Flip the pipeline's
+      // pending autoPlay so the MseSink fires video.play() once buffered
+      // data lands, and also attempt an immediate video.play() in case the
+      // sink is already wired up. The immediate call can reject when
+      // video.src hasn't been set yet — that's fine, the deferred path will
+      // catch it.
+      pipeline.setAutoPlay(true);
+      try {
+        await video.play();
+      } catch {
+        /* sink not ready yet; setAutoPlay will handle playback on first buffered write */
+      }
     },
     pause() {
       wantPlay = false;

@@ -51,8 +51,12 @@ export class VideoRenderer {
     });
 
     this.canvas = document.createElement("canvas");
+    // object-fit:contain letterboxes the canvas bitmap (sized to
+    // frame.displayWidth × displayHeight in paint()) inside the stage so
+    // portrait / non-stage-aspect content isn't stretched. Canvas is a
+    // replaced element, so object-fit applies.
     this.canvas.style.cssText =
-      "position:absolute;left:0;top:0;width:100%;height:100%;background:black;";
+      "position:absolute;left:0;top:0;width:100%;height:100%;background:black;object-fit:contain;";
 
     // Attach the canvas next to the video. When the video lives inside an
     // `<avbridge-video>` shadow root, `target.parentElement` is the

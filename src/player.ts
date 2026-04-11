@@ -34,6 +34,11 @@ export class UnifiedPlayer {
   private lastProgressPosition = -1;
   private errorListener: (() => void) | null = null;
 
+  // Bound so we can removeEventListener in destroy(); without this the
+  // listener outlives the player and accumulates on elements that swap
+  // source (e.g. <avbridge-video>).
+  private endedListener: (() => void) | null = null;
+
   // Serializes escalation / setStrategy calls
   private switchingPromise: Promise<void> = Promise.resolve();
 
@@ -121,12 +126,10 @@ export class UnifiedPlayer {
       // Try the primary strategy, falling through the chain on failure
       await this.startSession(decision.strategy, decision.reason);
 
-      // Apply subtitles for non-canvas strategies. Awaited so fetch/parse
-      // failures surface deterministically — but per-track failures are
-      // caught inside attachSubtitleTracks and logged via console.warn so
-      // a single bad sidecar doesn't break bootstrap. Subtitles are not
-      // load-bearing for playback. (Promoting this to a typed `subtitleerror`
-      // event is a nice-to-have follow-up.)
+      // Apply subtitles for non-canvas strategies. Per-track failures are
+      // caught inside attachSubtitleTracks and logged via console.warn —
+      // subtitles are not load-bearing, so a bad sidecar must not break
+      // bootstrap.
       if (this.session!.strategy !== "fallback" && this.session!.strategy !== "hybrid") {
         await attachSubtitleTracks(
           this.options.target,
@@ -146,7 +149,8 @@ export class UnifiedPlayer {
       });
 
       this.startTimeupdateLoop();
-      this.options.target.addEventListener("ended", () => this.emitter.emit("ended", undefined));
+      this.endedListener = () => this.emitter.emit("ended", undefined);
+      this.options.target.addEventListener("ended", this.endedListener);
       this.emitter.emitSticky("ready", undefined);
       const bootstrapElapsed = performance.now() - bootstrapStart;
       dbg.info("bootstrap", `ready in ${bootstrapElapsed.toFixed(0)}ms`);
@@ -492,6 +496,10 @@ export class UnifiedPlayer {
       this.timeupdateInterval = null;
     }
     this.clearSupervisor();
+    if (this.endedListener) {
+      this.options.target.removeEventListener("ended", this.endedListener);
+      this.endedListener = null;
+    }
     if (this.session) {
       await this.session.destroy();
       this.session = null;
@@ -508,14 +516,12 @@ export async function createPlayer(options: CreatePlayerOptions): Promise<Unifie
 }
 
 /**
- * Build a synthetic classification when the consumer asked for a specific
- * initial strategy. We ask `classify()` for the natural decision so we can
- * inherit the correct fallback chain, then override the strategy + class.
- *
- * Why this matters: hard-coding `class: "NATIVE"` (the old behavior) made
- * diagnostics lie for every initialStrategy that wasn't actually native, and
- * any downstream logic that trusted `strategyClass` could make the wrong
- * decision. We now derive the class from the picked strategy.
+ * Build a synthetic classification for an explicit `initialStrategy` override.
+ * The `class` is derived from the chosen strategy so diagnostics and any
+ * downstream consumer of `strategyClass` see the real strategy. The fallback
+ * chain is inherited from the natural classification but must never contain
+ * `initial` itself — otherwise `startSession` would retry the strategy that
+ * just failed before escalating.
  *
  * @internal — exported for unit tests; not part of the public API.
  */
@@ -525,11 +531,13 @@ export function buildInitialDecision(
 ): Classification {
   const natural = classify(ctx);
   const cls = strategyToClass(initial, natural);
+  const inherited = natural.fallbackChain ?? defaultFallbackChain(initial);
+  const fallbackChain = inherited.filter((s) => s !== initial);
   return {
     class: cls,
     strategy: initial,
     reason: `initial strategy "${initial}" requested via options.initialStrategy`,
-    fallbackChain: natural.fallbackChain ?? defaultFallbackChain(initial),
+    fallbackChain,
   };
 }
 

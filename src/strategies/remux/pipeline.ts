@@ -24,6 +24,8 @@ import {
 export interface RemuxPipeline {
   start(fromTime?: number, autoPlay?: boolean): Promise<void>;
   seek(time: number, autoPlay?: boolean): Promise<void>;
+  /** Update the autoplay intent mid-flight — used when play() arrives after seek() but before the MseSink has been constructed. */
+  setAutoPlay(autoPlay: boolean): void;
   destroy(): Promise<void>;
   stats(): Record<string, unknown>;
 }
@@ -247,6 +249,10 @@ export async function createRemuxPipeline(
         // eslint-disable-next-line no-console
         console.error("[avbridge] remux pipeline reseek failed:", err);
       });
+    },
+    setAutoPlay(autoPlay) {
+      pendingAutoPlay = autoPlay;
+      if (sink) sink.setPlayOnSeek(autoPlay);
     },
     async destroy() {
       destroyed = true;

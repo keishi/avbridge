@@ -28,10 +28,10 @@ function ctx(partial: Partial<MediaContext>): MediaContext {
   } as MediaContext;
 }
 
-describe("buildInitialDecision (regression: forced strategy class)", () => {
-  // Regression: previously buildInitialDecision (then `forceStrategy`) was
-  // hard-coded to `class: "NATIVE"` regardless of the chosen strategy. Any
-  // downstream logic that trusted strategyClass got the wrong answer.
+describe("buildInitialDecision", () => {
+  // Invariant: the returned `class` must derive from the chosen strategy
+  // (not a hard-coded NATIVE) so diagnostics and any downstream consumer
+  // of strategyClass see the real strategy.
 
   it("derives REMUX_CANDIDATE class when initialStrategy='remux' on a remuxable container", () => {
     const decision = buildInitialDecision(
@@ -90,6 +90,26 @@ describe("buildInitialDecision (regression: forced strategy class)", () => {
     expect(decision.fallbackChain).toBeDefined();
     // Native should be able to escalate down through the chain.
     expect(decision.fallbackChain!.length).toBeGreaterThan(0);
+  });
+
+  it("does not reinsert the initial strategy into the inherited fallback chain", () => {
+    // Hi10P on mp4 classifies as RISKY_NATIVE with fallbackChain
+    // ["remux", "hybrid", "fallback"]. If the caller forces initialStrategy
+    // "remux", the synthetic decision must strip "remux" so startSession
+    // doesn't retry it after its own failure.
+    const decision = buildInitialDecision(
+      "remux",
+      ctx({
+        container: "mp4",
+        videoTracks: [
+          { id: 0, codec: "h264", profile: "High 10", bitDepth: 10, pixelFormat: "yuv420p10le", width: 1920, height: 1080 },
+        ],
+        audioTracks: [{ id: 1, codec: "aac", channels: 2, sampleRate: 48000 }],
+      }),
+    );
+    expect(decision.strategy).toBe("remux");
+    expect(decision.fallbackChain).not.toContain("remux");
+    expect(decision.fallbackChain).toEqual(["hybrid", "fallback"]);
   });
 });
 

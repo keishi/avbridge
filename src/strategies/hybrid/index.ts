@@ -45,11 +45,18 @@ export async function createHybridSession(
     throw err;
   }
 
-  // Patch <video> element for the unified player layer
+  // Patch <video> element for the unified player layer. `paused` is
+  // mirrored from the audio clock so callers that inspect target.paused
+  // (notably doSetStrategy capturing wasPlaying) see the real play state
+  // — the underlying <video> never has its own src and stays paused.
   Object.defineProperty(target, "currentTime", {
     configurable: true,
     get: () => audio.now(),
     set: (v: number) => { void doSeek(v); },
+  });
+  Object.defineProperty(target, "paused", {
+    configurable: true,
+    get: () => !audio.isPlaying(),
   });
   if (ctx.duration && Number.isFinite(ctx.duration)) {
     Object.defineProperty(target, "duration", {
@@ -129,6 +136,7 @@ export async function createHybridSession(
       try {
         delete (target as unknown as Record<string, unknown>).currentTime;
         delete (target as unknown as Record<string, unknown>).duration;
+        delete (target as unknown as Record<string, unknown>).paused;
       } catch { /* ignore */ }
     },
 

@@ -93,6 +93,13 @@ export async function createFallbackSession(
       void doSeek(v);
     },
   });
+  // Mirror `paused` from the audio clock — the underlying <video> never
+  // has its own src, so its native `paused` is always true and would
+  // mislead doSetStrategy's wasPlaying capture on a backend switch.
+  Object.defineProperty(target, "paused", {
+    configurable: true,
+    get: () => !audio.isPlaying(),
+  });
   // Mirror duration so the demo's controls can use target.duration too.
   if (ctx.duration && Number.isFinite(ctx.duration)) {
     Object.defineProperty(target, "duration", {
@@ -244,6 +251,7 @@ export async function createFallbackSession(
       try {
         delete (target as unknown as Record<string, unknown>).currentTime;
         delete (target as unknown as Record<string, unknown>).duration;
+        delete (target as unknown as Record<string, unknown>).paused;
       } catch { /* ignore */ }
     },
 

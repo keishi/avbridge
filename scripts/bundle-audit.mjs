@@ -94,9 +94,10 @@ const SCENARIOS = [
     description: "import 'avbridge/element' — registers <avbridge-video>",
     code: `import "${ELEMENT_PATH}";`,
     // Element entry includes the full createPlayer engine since the element
-    // wraps it. ~17 KB gzip is the current floor after 2.1.2's shadow-DOM
-    // wrapper, remux reseek fix, and probe fallback chain.
-    maxEagerGzip: 18_000,
+    // wraps it. The ceiling is a tripwire for order-of-magnitude regressions
+    // (e.g. libav accidentally pulled into the eager bundle), not a tight
+    // budget — realistic first-play cost is dominated by the ~1 MB lazy wasm.
+    maxEagerGzip: 20_000,
     requireInEntry: ["customElements"],
   },
 ];
