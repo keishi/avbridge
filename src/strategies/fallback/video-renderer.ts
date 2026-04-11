@@ -53,11 +53,36 @@ export class VideoRenderer {
     this.canvas = document.createElement("canvas");
     this.canvas.style.cssText =
       "position:absolute;left:0;top:0;width:100%;height:100%;background:black;";
-    const parent = target.parentElement;
-    if (parent && getComputedStyle(parent).position === "static") {
-      parent.style.position = "relative";
+
+    // Attach the canvas next to the video. When the video lives inside an
+    // `<avbridge-video>` shadow root, `target.parentElement` is the
+    // positioned `<div part="stage">` wrapper the element created
+    // precisely for this purpose. When the video is used standalone
+    // (legacy `createPlayer({ target: videoEl })` path), we fall back to
+    // `parentNode` — which handles plain Elements, and also ShadowRoots
+    // if someone inserts a bare <video> inside their own shadow DOM
+    // without a wrapper.
+    const parent: ParentNode | null =
+      (target.parentElement as ParentNode | null) ?? target.parentNode;
+    if (parent && parent instanceof HTMLElement) {
+      if (getComputedStyle(parent).position === "static") {
+        parent.style.position = "relative";
+      }
     }
-    parent?.insertBefore(this.canvas, target);
+    if (parent) {
+      parent.insertBefore(this.canvas, target);
+    } else {
+      // No parent at all — the target is detached. Fall back to appending
+      // the canvas to document.body so at least the frames are visible
+      // somewhere while the consumer fixes their DOM layout. This is a
+      // loud fallback: log a warning so the misuse is obvious.
+      // eslint-disable-next-line no-console
+      console.warn(
+        "[avbridge] fallback renderer: target <video> has no parent; " +
+        "appending canvas to document.body as a fallback.",
+      );
+      document.body.appendChild(this.canvas);
+    }
     target.style.visibility = "hidden";
 
     const ctx = this.canvas.getContext("2d");

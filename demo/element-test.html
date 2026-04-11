@@ -15,6 +15,10 @@
       <code>scripts/element-test.mjs</code>. It is not a normal demo.</p>
     <div id="container"></div>
     <pre id="log"></pre>
+    <script>
+      // See demo/index.html for why this is needed in Vite dev mode.
+      window.AVBRIDGE_LIBAV_BASE = "/libav";
+    </script>
     <script type="module" src="./element-test.ts"></script>
   </body>
 </html>

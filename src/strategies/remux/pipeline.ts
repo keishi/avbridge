@@ -187,7 +187,16 @@ export async function createRemuxPipeline(
       const vTs = !vNext.done ? vNext.value.timestamp : Number.POSITIVE_INFINITY;
       const aTs = !aNext.done ? aNext.value.timestamp : Number.POSITIVE_INFINITY;
 
-      if (!vNext.done && vTs <= aTs) {
+      // Mediabunny's muxer requires the first packet on a fresh Output to
+      // be a key packet. We fetched `startVideoPacket` via
+      // `videoSink.getKeyPacket(fromTime)` so the first video packet is
+      // guaranteed to be a keyframe — but a demuxer can hand us an audio
+      // packet with a lower timestamp, which mediabunny rejects with
+      // "First packet must be a key packet." Force the first video
+      // packet out before we let any audio through.
+      const forceVideoFirst = firstVideo && !vNext.done;
+
+      if (!vNext.done && (forceVideoFirst || vTs <= aTs)) {
         await videoSource.add(
           vNext.value,
           firstVideo && videoConfig ? { decoderConfig: videoConfig } : undefined,

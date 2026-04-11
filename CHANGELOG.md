@@ -4,6 +4,49 @@ All notable changes to **avbridge** are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.2]
+
+### Fixed
+
+- **Fallback strategy video now visible inside `<avbridge-video>`.** The
+  fallback renderer attaches its canvas overlay via `target.parentElement`,
+  but when the `<video>` lives inside a `ShadowRoot` (as it does in the
+  custom element), `parentElement` is `null` because `ShadowRoot` is not
+  an `Element`. The canvas silently never got attached to the DOM, so
+  frames were decoded and "painted" (the stats counters incremented) but
+  nothing was ever visible — just audio. Fixed by wrapping the shadow
+  `<video>` in a positioned `<div part="stage">` and hardening the
+  renderer's parent lookup to use `parentNode` as a fallback with a loud
+  warning if no parent exists at all.
+
+- **Remux strategy reseek no longer fails with "First packet must be a
+  key packet".** When `setStrategy("remux")` is invoked mid-playback, the
+  pipeline recreates mediabunny's `Output` (required because mediabunny's
+  fMP4 muxer is one-shot streaming). The pump's packet race could then
+  emit an audio packet first on the fresh muxer, which mediabunny rejects
+  because the first packet of any muxer run must be a key packet. The
+  pump now forces the first video packet — which we fetch via
+  `getKeyPacket()` and is guaranteed to be a keyframe — out before any
+  audio.
+
+- **`mp4v`-in-MP4 files now fall through to libav probing.** mediabunny's
+  MP4 demuxer asserts on files whose video sample entry type isn't one
+  it recognizes (`mp4v` for MPEG-4 Part 2 / DivX / Xvid packaged in
+  ISOBMFF is the common case). Previously the probe rethrew the
+  assertion and gave up. The probe now escalates to libav when
+  mediabunny fails on any mediabunny-targeted container (mp4, mkv,
+  webm, …), which handles the long tail of codec combinations
+  mediabunny's pure-JS parser doesn't cover. If libav also fails, both
+  errors are surfaced together.
+
+- **Demo dev server serves libav binaries via a Vite middleware plugin**
+  instead of `demo/public/libav/`. Recent Vite versions refuse to let
+  source code `import()` files out of `public/`, which broke the libav
+  loader's dynamic import. `serveVendorLibav()` in `vite.config.ts` now
+  streams files directly out of `vendor/libav/` at the same `/libav/*`
+  URL, bypassing the restriction. `scripts/copy-libav.mjs` is
+  simplified — it no longer mirrors to the demo's public tree.
+
 ## [2.1.1]
 
 ### Fixed

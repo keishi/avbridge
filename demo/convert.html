@@ -237,6 +237,10 @@
       <pre id="result-info" class="info">No conversion run yet.</pre>
     </details>
 
+    <script>
+      // See demo/index.html for why this is needed in Vite dev mode.
+      window.AVBRIDGE_LIBAV_BASE = "/libav";
+    </script>
     <script type="module" src="./convert.ts"></script>
   </body>
 </html>

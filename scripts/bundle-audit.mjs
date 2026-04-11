@@ -94,8 +94,9 @@ const SCENARIOS = [
     description: "import 'avbridge/element' — registers <avbridge-video>",
     code: `import "${ELEMENT_PATH}";`,
     // Element entry includes the full createPlayer engine since the element
-    // wraps it. ~16 KB gzip is a reasonable ceiling.
-    maxEagerGzip: 17_000,
+    // wraps it. ~17 KB gzip is the current floor after 2.1.2's shadow-DOM
+    // wrapper, remux reseek fix, and probe fallback chain.
+    maxEagerGzip: 18_000,
     requireInEntry: ["customElements"],
   },
 ];

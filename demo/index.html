@@ -77,6 +77,15 @@
       <pre id="diagnostics">{}</pre>
     </details>
 
+    <script>
+      // Point the libav loader at the Vite-served copies in demo/public/libav.
+      // 2.1.0's default resolves `../vendor/libav` relative to the loader
+      // module URL, which only works when avbridge is loaded from its own
+      // dist/ in a node_modules install. In Vite dev mode the loader is
+      // served from src/strategies/fallback/ so the default resolves wrong.
+      // `predemo` copies vendor/libav/ into demo/public/libav/.
+      window.AVBRIDGE_LIBAV_BASE = "/libav";
+    </script>
     <script type="module" src="./main.ts"></script>
   </body>
 </html>

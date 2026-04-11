@@ -1,5 +1,7 @@
 import { defineConfig, type Plugin } from "vite";
-import { resolve } from "node:path";
+import { resolve, join, normalize } from "node:path";
+import { createReadStream, statSync } from "node:fs";
+import { extname } from "node:path";
 
 /**
  * Cross-origin isolation plugin.
@@ -82,9 +84,81 @@ function crossOriginIsolation(): Plugin {
   };
 }
 
+/**
+ * Serve the repository's `vendor/libav/` tree at a stable `/libav/*` URL.
+ *
+ * We used to copy the binaries into `demo/public/libav/` via `copy-libav.mjs`
+ * and rely on Vite's public-dir handling. That worked for `<img>` / `<video>`
+ * tags but recent Vite versions refuse to let source code `import()` files
+ * out of `public/` (to keep the dev/prod semantics of the public folder
+ * consistent), which broke the libav loader's dynamic import.
+ *
+ * This middleware sidesteps that restriction: it streams files directly out
+ * of `vendor/libav/` as regular HTTP responses before Vite's module pipeline
+ * sees them, so the dynamic `import()` in the libav loader just works. The
+ * vendor directory already holds both variants (webcodecs is vendored there
+ * by `scripts/copy-libav.mjs` at build time; avbridge is the custom build
+ * from `scripts/build-libav.sh`), so there's no separate mirror step.
+ */
+function serveVendorLibav(): Plugin {
+  const vendorRoot = resolve(__dirname, "vendor/libav");
+  const mimeByExt: Record<string, string> = {
+    ".mjs": "text/javascript; charset=utf-8",
+    ".js": "text/javascript; charset=utf-8",
+    ".wasm": "application/wasm",
+    ".map": "application/json; charset=utf-8",
+    ".d.ts": "text/plain; charset=utf-8",
+  };
+  function handle(req: { url?: string }, res: {
+    setHeader: (k: string, v: string) => void;
+    statusCode: number;
+    end: (msg?: string) => void;
+  }, next: () => void): void {
+    const url = req.url ?? "";
+    if (!url.startsWith("/libav/")) { next(); return; }
+    // Strip query string and map to filesystem.
+    const clean = url.split("?", 1)[0].split("#", 1)[0];
+    const rel = clean.slice("/libav/".length);
+    // Normalize and reject any path that tries to escape vendorRoot.
+    const filePath = normalize(join(vendorRoot, rel));
+    if (!filePath.startsWith(vendorRoot)) {
+      res.statusCode = 403;
+      res.end("forbidden");
+      return;
+    }
+    let st;
+    try { st = statSync(filePath); } catch {
+      res.statusCode = 404;
+      res.end("not found");
+      return;
+    }
+    if (!st.isFile()) {
+      res.statusCode = 404;
+      res.end("not found");
+      return;
+    }
+    const ext = extname(filePath);
+    const mime = mimeByExt[ext] ?? "application/octet-stream";
+    res.setHeader("Content-Type", mime);
+    res.setHeader("Content-Length", String(st.size));
+    // CORP so these files are legal under our require-corp COEP.
+    res.setHeader("Cross-Origin-Resource-Policy", "same-origin");
+    createReadStream(filePath).pipe(res as unknown as NodeJS.WritableStream);
+  }
+  return {
+    name: "avbridge:serve-vendor-libav",
+    configureServer(server) {
+      server.middlewares.use(handle);
+    },
+    configurePreviewServer(server) {
+      server.middlewares.use(handle);
+    },
+  };
+}
+
 export default defineConfig({
   root: "demo",
-  plugins: [crossOriginIsolation()],
+  plugins: [crossOriginIsolation(), serveVendorLibav()],
   resolve: {
     alias: {
       avbridge: resolve(__dirname, "src/index.ts"),
@@ -108,9 +182,9 @@ export default defineConfig({
   // module so they're code-split into their own chunk. We exclude them from
   // dep optimization because the variant uses `import.meta.url` to find its
   // sibling .wasm files; pre-bundling breaks that. The variant binary itself
-  // is served from `demo/public/libav/<variant>/` (copied there by
-  // `scripts/copy-libav.mjs` via the `predemo` script), and the loader points
-  // libav at that URL via an explicit `base` option.
+  // is served from `vendor/libav/<variant>/` by the `serveVendorLibav` plugin
+  // above (same URL layout as before — `/libav/<variant>/…` — but bypassing
+  // Vite's public-dir restriction on dynamic imports).
   optimizeDeps: {
     exclude: [
       "@libav.js/variant-webcodecs",

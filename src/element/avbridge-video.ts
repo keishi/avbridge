@@ -170,11 +170,22 @@ export class AvbridgeVideoElement extends HTMLElementCtor {
   constructor() {
     super();
     const root = this.attachShadow({ mode: "open" });
+
+    // A positioned wrapper inside the shadow root. The fallback strategy
+    // overlays a canvas on top of the <video> via `target.parentNode` —
+    // that only works if the parent is a real Element with layout. Without
+    // this wrapper, `target.parentElement` would be null (ShadowRoot is
+    // not an Element) and the canvas would never attach to the DOM.
+    const stage = document.createElement("div");
+    stage.setAttribute("part", "stage");
+    stage.style.cssText = "position:relative;width:100%;height:100%;display:block;";
+    root.appendChild(stage);
+
     this._videoEl = document.createElement("video");
     this._videoEl.setAttribute("part", "video");
     this._videoEl.style.cssText = "width:100%;height:100%;display:block;background:#000;";
     this._videoEl.playsInline = true;
-    root.appendChild(this._videoEl);
+    stage.appendChild(this._videoEl);
 
     // Forward the underlying <video>'s `progress` event so consumers can
     // observe buffered-range updates without reaching into the shadow DOM.

@@ -1,32 +1,36 @@
 #!/usr/bin/env node
 /**
- * Two responsibilities:
- *
- * 1. **Vendor the webcodecs variant** into `vendor/libav/webcodecs/` so the
- *    published npm tarball contains every binary a consumer needs. Without
- *    this step, the webcodecs variant lives at `node_modules/@libav.js/…`
- *    and browser-direct consumers have no way to reach it.
- *
- * 2. **Mirror the whole `vendor/libav/` tree into `demo/public/libav/`** so
- *    the local demo's dev server and the Puppeteer test harness can serve
- *    the files at a stable URL.
+ * Vendor the `@libav.js/variant-webcodecs` binaries into
+ * `vendor/libav/webcodecs/` so the published npm tarball ships every libav
+ * binary a consumer needs. Without this step, the webcodecs variant would
+ * live at `node_modules/@libav.js/variant-webcodecs/` and browser-direct
+ * consumers would have no way to reach it.
  *
  * The canonical runtime layout is:
  *
- *   vendor/libav/webcodecs/libav-webcodecs.mjs
- *   vendor/libav/webcodecs/libav-<ver>-webcodecs.wasm.wasm
- *   …
- *   vendor/libav/avbridge/libav-avbridge.mjs
- *   vendor/libav/avbridge/libav-<ver>-avbridge.wasm.wasm
- *   …
+ *   vendor/libav/
+ *     webcodecs/
+ *       libav-webcodecs.mjs
+ *       libav-<ver>-webcodecs.wasm.mjs
+ *       libav-<ver>-webcodecs.wasm.wasm
+ *     avbridge/
+ *       libav-avbridge.mjs
+ *       libav-<ver>-avbridge.wasm.mjs
+ *       libav-<ver>-avbridge.wasm.wasm
  *
  * The libav loader at runtime resolves `<base>/<variant>/libav-<variant>.mjs`
- * relative to its own module URL, so once the package is installed under
- * `node_modules/avbridge/`, these files are automatically found without any
- * consumer configuration.
+ * relative to its own module URL (for the browser entry) or via an explicit
+ * `AVBRIDGE_LIBAV_BASE` override (for dev servers and bundler consumers).
+ * Either way it finds the binaries under `vendor/libav/<variant>/` with no
+ * extra configuration.
  *
- * Run as a prebuild step (`npm run build` triggers it via the `prebuild`
- * hook) so the npm tarball always contains fresh webcodecs binaries.
+ * Demo / dev server note: `vite.config.ts` has a tiny middleware plugin
+ * (`serveVendorLibav`) that streams files out of this directory at
+ * `/libav/*`, so the demo doesn't need a copy-to-public-dir step.
+ *
+ * Run as a prebuild step (`npm run build` triggers it via `prebuild`) so
+ * every `npm run build` rewrites the vendored webcodecs binaries in place,
+ * keeping them in lockstep with the pinned npm package version.
  */
 import { cpSync, mkdirSync, readdirSync, rmSync, existsSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
@@ -43,9 +47,6 @@ const npmVariants = [
 // Where vendored binaries live inside the package — this directory is
 // listed in package.json `files:` so it ships in the tarball.
 const vendorLibav = resolve(repoRoot, "vendor/libav");
-
-// Where the demo/test harness expects them.
-const demoLibav = resolve(repoRoot, "demo/public/libav");
 
 // Whitelist of filename patterns we actually ship. Everything else in the
 // upstream variant's dist/ (asm.js fallbacks for browsers that don't
@@ -88,14 +89,14 @@ for (const v of npmVariants) {
   }
   console.log(
     `[copy-libav] vendored ${v.name}: ${copied} file(s) → vendor/libav/${v.name}/ ` +
-    `(skipped ${skipped} unused variants: asm.js fallbacks + threaded builds)`,
+    `(skipped ${skipped} unused variants)`,
   );
 }
 
-// ── Step 1b: prune any unused files already in vendor/libav/avbridge/ ──────
+// ── Step 2: prune any unused files already in vendor/libav/avbridge/ ───────
 //
 // The custom avbridge variant is built locally via scripts/build-libav.sh
-// and lands here. Apply the same whitelist so the tarball doesn't carry
+// and lands there. Apply the same whitelist so the tarball doesn't carry
 // asm.js fallbacks or non-module .js entry points we never load.
 const avbridgeDir = join(vendorLibav, "avbridge");
 if (existsSync(avbridgeDir)) {
@@ -111,25 +112,3 @@ if (existsSync(avbridgeDir)) {
     console.log(`[copy-libav] pruned ${pruned} unused file(s) from vendor/libav/avbridge/`);
   }
 }
-
-// ── Step 2: mirror vendor/libav/ → demo/public/libav/ for the demo ─────────
-
-if (existsSync(demoLibav)) {
-  rmSync(demoLibav, { recursive: true, force: true });
-}
-mkdirSync(demoLibav, { recursive: true });
-
-let demoCount = 0;
-for (const name of readdirSync(vendorLibav)) {
-  const from = join(vendorLibav, name);
-  const to = join(demoLibav, name);
-  const st = statSync(from);
-  if (st.isDirectory()) {
-    cpSync(from, to, { recursive: true });
-    demoCount += readdirSync(from).length;
-  } else if (st.isFile() && name !== "README.md") {
-    cpSync(from, to);
-    demoCount += 1;
-  }
-}
-console.log(`[copy-libav] mirrored ${demoCount} file(s) → demo/public/libav/`);
