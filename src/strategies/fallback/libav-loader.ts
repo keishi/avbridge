@@ -92,6 +92,31 @@ async function loadVariant(
   // the same convention (`libav-webcodecs.mjs`, `libav-default.mjs`).
   const variantUrl = `${base}/libav-${variant}.mjs`;
 
+  // Preflight HEAD-ish check: issue a bytes=0-0 range request so a missing
+  // file fails fast with a clear error instead of hanging deep inside the
+  // dynamic import or inside libav's own WASM instantiation. Surfaces the
+  // most common mistake ("libav base path is wrong") in <100 ms instead of
+  // an indeterminate stall.
+  if (typeof fetch === "function") {
+    try {
+      const head = await fetch(variantUrl, { method: "GET", headers: { Range: "bytes=0-0" } });
+      if (!head.ok && head.status !== 206) {
+        throw new Error(
+          `HTTP ${head.status} ${head.statusText} — check that libav files are served ` +
+          `at ${base}/ (override via globalThis.AVBRIDGE_LIBAV_BASE)`,
+        );
+      }
+      // Drain the tiny response so the connection can be reused.
+      try { await head.arrayBuffer(); } catch { /* ignore */ }
+    } catch (err) {
+      cache.delete(key);
+      throw chain(
+        `libav.js "${variant}" variant not reachable at ${variantUrl}`,
+        err,
+      );
+    }
+  }
+
   let mod: LoadedVariant;
   try {
     // @ts-ignore runtime URL
@@ -105,10 +130,9 @@ async function loadVariant(
     const hint =
       variant === "avbridge"
         ? `The "avbridge" variant is a custom local build. Run \`./scripts/build-libav.sh\` ` +
-          `to produce it (requires Emscripten; ~15-30 min the first time), then ` +
-          `\`npm run predemo\` to copy it into the demo asset path.`
-        : `Make sure the variant files are present (run \`npm run predemo\` or copy ` +
-          `node_modules/@libav.js/variant-${variant}/dist/* into the URL space).`;
+          `to produce it (requires Emscripten; ~15-30 min the first time).`
+        : `Make sure the variant files are present at ${base}/ (set ` +
+          `globalThis.AVBRIDGE_LIBAV_BASE to override the default lookup path).`;
     throw new Error(
       `failed to load libav.js "${variant}" variant from ${variantUrl}. ${hint} ` +
         `Original error: ${(err as Error).message || String(err)}`,
@@ -161,15 +185,33 @@ function buildOpts(base: string, wantThreads: boolean): Record<string, unknown> 
 }
 
 function libavBaseUrl(): string {
+  // Consumer override — the documented "LGPL replaceability" hook.
+  // Setting `globalThis.AVBRIDGE_LIBAV_BASE = "/my/path"` lets anyone swap
+  // in a different libav build (custom fragments, security patches, etc.)
+  // without rebuilding avbridge.
   const override =
     typeof globalThis !== "undefined"
       ? (globalThis as { AVBRIDGE_LIBAV_BASE?: string }).AVBRIDGE_LIBAV_BASE
       : undefined;
   if (override) return override;
-  if (typeof location !== "undefined" && location.protocol.startsWith("http")) {
-    return `${location.origin}/libav`;
+
+  // Default: resolve relative to this module's URL. When avbridge is installed
+  // under `node_modules/avbridge/`, this module lives at `dist/chunk-*.js` (or
+  // `dist/element-browser.js` for the browser entry) and `../vendor/libav`
+  // resolves to `node_modules/avbridge/vendor/libav`, where the build step
+  // vendored every variant's binaries. That's the zero-config path.
+  //
+  // `import.meta.url` throws in some synthetic environments (CJS tests, some
+  // SSR evaluators). If it fails, fall back to the legacy `/libav` path so
+  // consumers who relied on the pre-2.1 behavior still work.
+  try {
+    return new URL("../vendor/libav", import.meta.url).href;
+  } catch {
+    if (typeof location !== "undefined" && location.protocol.startsWith("http")) {
+      return `${location.origin}/libav`;
+    }
+    return "/libav";
   }
-  return "/libav";
 }
 
 function chain(message: string, err: unknown): Error {

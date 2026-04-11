@@ -4,7 +4,58 @@ All notable changes to **avbridge** are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [2.0.0]
+## [2.1.0]
+
+### Added
+
+- **Bundled libav.js binaries.** `npm install avbridge` now ships both
+  the `webcodecs` and the custom `avbridge` libav variants under
+  `vendor/libav/<variant>/`. Consumers no longer need to install
+  `@libav.js/variant-webcodecs` separately, and there's no more "run
+  `./scripts/build-libav.sh` for AVI support" friction — both variants
+  are in the tarball. Packed tarball: **4.0 MB**, unpacked: **15 MB**.
+  Unused asm.js fallbacks and threaded builds are pruned at build time
+  to keep the size manageable.
+
+- **Pre-bundled browser entry: `avbridge/element-browser`.** A new
+  single-file output (`dist/element-browser.js`) intended for direct
+  `<script type="module">` consumption without a bundler. mediabunny is
+  inlined into the bundle; mediabunny's `node:fs/promises` Node branch
+  is aliased to a stub at build time. libav.js stays external and
+  lazy-loads from `../vendor/libav/` relative to the module's own URL
+  via `import.meta.url`. The usual `dist/index.js` and `dist/element.js`
+  entries are unchanged for bundler consumers.
+
+- **`THIRD_PARTY_LICENSES.md` and `NOTICE.md`** — full LGPL-2.1
+  compliance paperwork for the bundled libav.js binaries. Attribution,
+  upstream pointers, replaceability hook documentation, and source
+  availability via the reproducible `scripts/build-libav.sh`.
+
+### Changed
+
+- **`libavBaseUrl()` now resolves relative to `import.meta.url`** by
+  default. When avbridge is installed under `node_modules/avbridge/`,
+  the loader automatically finds libav at
+  `node_modules/avbridge/vendor/libav/<variant>/` with zero
+  configuration. The `AVBRIDGE_LIBAV_BASE` override is still the
+  documented escape hatch (and also the LGPL replaceability hook).
+
+- **`libav-loader` now preflights variant URLs** with a `bytes=0-0`
+  Range request before invoking dynamic import. A missing file now
+  throws a clear "libav.js \"<variant>\" variant not reachable at
+  <url>" error in <100 ms instead of hanging inside WASM
+  instantiation.
+
+- **`@libav.js/variant-webcodecs` and `libavjs-webcodecs-bridge`
+  promoted from `optionalDependencies` to `dependencies`.** Consumers
+  no longer need a separate install step. Only `@libav.js/types` stays
+  optional (it's types-only, no runtime code).
+
+### Removed
+
+- Nothing. The new browser entry is additive; the classic entries are
+  byte-for-byte identical to 2.0.0 except for the loader's default
+  path resolution.
 
 ### Breaking changes
 

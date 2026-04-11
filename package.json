@@ -1,6 +1,6 @@
 {
   "name": "avbridge",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "description": "Play and convert arbitrary video files in the browser. Native, remux, hybrid, fallback, and transcode — one API.",
   "license": "MIT",
   "author": "Keishi Hattori",
@@ -34,7 +34,8 @@
   "type": "module",
   "sideEffects": [
     "./dist/element.js",
-    "./dist/element.cjs"
+    "./dist/element.cjs",
+    "./dist/element-browser.js"
   ],
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",
@@ -49,16 +50,27 @@
       "types": "./dist/element.d.ts",
       "import": "./dist/element.js",
       "require": "./dist/element.cjs"
-    }
+    },
+    "./element-browser": {
+      "types": "./dist/element.d.ts",
+      "import": "./dist/element-browser.js"
+    },
+    "./vendor/*": "./vendor/*"
   },
   "files": [
     "dist",
     "src",
+    "vendor/libav/avbridge",
+    "vendor/libav/webcodecs",
+    "vendor/libav/README.md",
     "README.md",
     "CHANGELOG.md",
-    "LICENSE"
+    "LICENSE",
+    "NOTICE.md",
+    "THIRD_PARTY_LICENSES.md"
   ],
   "scripts": {
+    "prebuild": "node scripts/copy-libav.mjs",
     "build": "tsup",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
@@ -76,12 +88,12 @@
     "audit:bundle": "node scripts/bundle-audit.mjs"
   },
   "dependencies": {
+    "@libav.js/variant-webcodecs": "^6.8.8",
+    "libavjs-webcodecs-bridge": "^0.3.2",
     "mediabunny": "^1.40.1"
   },
   "optionalDependencies": {
-    "@libav.js/types": "^6.8.8",
-    "@libav.js/variant-webcodecs": "^6.8.8",
-    "libavjs-webcodecs-bridge": "^0.3.2"
+    "@libav.js/types": "^6.8.8"
   },
   "devDependencies": {
     "@types/node": "^20.11.0",

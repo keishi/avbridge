@@ -9,10 +9,12 @@ demo/public/libav
 # Local Claude Code config (per-developer permission whitelist)
 .claude/
 
-# Vendored libav.js binaries — large, built locally via scripts/build-libav.sh
-# Uncomment the next line to track them in git (e.g. for CI without Emscripten)
-# !vendor/libav/*.wasm
-vendor/libav/*.wasm
-vendor/libav/*.js
-vendor/libav/*.mjs
+# Vendored libav.js binaries — large build artifacts.
+# - vendor/libav/avbridge/ is produced by scripts/build-libav.sh (Emscripten)
+# - vendor/libav/webcodecs/ is populated by scripts/copy-libav.mjs from
+#   node_modules/@libav.js/variant-webcodecs/ at prebuild time
+# Both subdirectories are shipped in the npm tarball via package.json
+# `files:` but not tracked in git.
+vendor/libav/avbridge/
+vendor/libav/webcodecs/
 !vendor/libav/README.md
