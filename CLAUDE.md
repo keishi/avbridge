@@ -47,13 +47,38 @@ Run all four after any code change. Commit only when all pass.
 ```
 npm run build         # tsup — prebuild vendors webcodecs into vendor/libav/
 npm run typecheck     # tsc --noEmit
-npm test              # vitest, 118+ unit tests
+npm test              # vitest, 199+ unit tests
 npm run audit:bundle  # tree-shaking budgets per entry point
 ```
 
 For browser verification: `npm run demo` starts the Vite dev server at
 `http://localhost:5173/`. Drop a media file and watch the strategy
 badge + diagnostics panel.
+
+## Testing tiers
+
+Three tiers, each covering a different layer. See
+`docs/dev/TESTING.md` for the full philosophy.
+
+1. **Unit tests** (`npm test`) — vitest, runs in jsdom. Covers
+   boundary validation (classification, codec mapping, sniffing,
+   conversion eligibility), infrastructure (TypedEmitter,
+   PluginRegistry, Diagnostics), and element lifecycle. Does **not**
+   test real playback — no MSE, WebCodecs, or Canvas in jsdom.
+2. **Browser integration** (`npm run test:playback`,
+   `npm run test:convert`) — Puppeteer against the Vite dev server.
+   Validates end-to-end: probe → classify → strategy → real A/V
+   output. Requires `npm run demo` running in another terminal.
+3. **Element lifecycle** (`node scripts/element-test.mjs`) — Puppeteer
+   tests for disconnect-during-bootstrap, rapid src reassignment,
+   race conditions, DOM move, play-before-ready.
+
+When adding tests, put them in the right tier:
+- **Can it run in jsdom?** → unit test in `tests/`.
+- **Does it need real MSE/WebCodecs/Canvas?** → browser test in
+  `scripts/`.
+- **Don't** try to unit-test A/V sync, MSE backpressure, or renderer
+  timing — those belong in the browser tier.
 
 ## Debug flag
 
