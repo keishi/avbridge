@@ -170,3 +170,156 @@ regular testing — "it works on my machine" doesn't catch it.
    ~30% of frames dropped as overflow. Fix: revert to 16 KB batches.
 
 See commit `b3fc2fb` for the full diff.
+
+---
+
+## 2026-04-13 — Hybrid A/V desync: clock domain drift between video PTS and AudioContext
+
+**Affected code:** `src/strategies/fallback/video-renderer.ts`, `src/strategies/hybrid/decoder.ts`
+**Ships in:** post-2.2.1 (pre-2.3.0)
+**Triage time:** ~4 hours across multiple iterations
+
+### Symptom
+
+Playing a 1h48m Blu-ray MKV (H.264 + DTS, 1920×804, 24fps) via the
+hybrid strategy (WebCodecs video + libav audio). Three symptoms:
+
+1. **After seeking 45 minutes in**, video stuttered at ~3 fps with
+   hundreds of dropped frames. Diagnostics showed `framesDroppedLate:
+   459` in a single session.
+2. **During continuous playback**, audio gradually drifted ahead of
+   video — noticeable after ~30 seconds, severe after 2 minutes.
+3. **Intermittent post-seek freeze** — after some seeks, the renderer
+   dropped the entire initial GOP (34 frames) and showed nothing for
+   ~1.5 seconds.
+
+Debug logging added to the renderer showed the raw numbers:
+
+```
+position=0s:    rawDrift=+76ms     (fine)
+position=496s:  rawDrift=-4614ms   (4.6 seconds behind!)
+position=2730s: rawDrift=-6507ms   (6.5 seconds behind!)
+```
+
+### Initial hypotheses (and why each failed)
+
+1. **"The pump decodes audio after video, starving the renderer."**
+   Reordered to audio-first (same fix as postmortem #1). Helped with
+   DTS-specific jank but didn't fix the drift.
+
+2. **"rAF quantization causes 3:2 pulldown at 60Hz."** Replaced
+   wall-clock pacing with PTS-based frame selection. Eliminated the
+   pulldown stutter but exposed the underlying drift — now instead of
+   slow steady drift, frames were mass-dropped as "late."
+
+3. **"EMA-smoothed calibration can track the drift."** Measured
+   `offset = paintedPTS - rawAudioNow` and smoothed with alpha=0.05.
+   **Failed: feedback loop.** The measured offset already included the
+   calibration (because the renderer paints the frame that the
+   calibrated clock says is "on time"), so the EMA converged to
+   whatever value it started at and drifted along with the error.
+
+4. **"Two-point rate correction can measure the real clock ratio."**
+   Recorded PTS and audio positions at two points 2 seconds apart,
+   computed `rate = ptsDelta / audioDelta`. **Failed: measured during
+   queue fill burst.** WebCodecs delivered 30 frames in 200ms during
+   startup, so the PTS advanced 30 frames while only 200ms of audio
+   time passed → computed rate=1.081 instead of the real ~1.001.
+
+### Root cause
+
+**Video PTS and AudioContext.currentTime are in different clock
+domains with a systematic rate difference.**
+
+- Video PTS: derived from the MKV file's timebase (1/1000s), set by
+  the encoder, converted to microseconds by libav → WebCodecs
+- Audio clock: `AudioContext.currentTime`, driven by the sound card's
+  hardware oscillator
+
+These two clocks drift ~7ms per second of media time (~0.7%). The
+drift appears as a large absolute offset when seeking deep into the
+file (0.7% × 3600s = 25.2s theoretical maximum for a 1-hour file).
+
+The renderer compared `frame.timestamp` (video domain) against
+`audio.now()` (audio domain) without accounting for the offset. At
+the start of the file the offset was small (~76ms, invisible). After
+seeking to 45 minutes, the accumulated offset was 6.5 seconds — every
+frame appeared "6.5 seconds late" and was dropped.
+
+### Fix
+
+**Periodic re-snap calibration.** On first paint after start/seek,
+snap a calibration offset:
+
+```ts
+ptsCalibrationUs = headPTS - rawAudioNowUs;
+```
+
+Then re-snap every 10 seconds. Between snaps, drift accumulates at
+most 70ms (10s × 7ms/s), which is below the human lip-sync
+perception threshold (~100ms). Each snap is independent — no feedback
+loop, no rate estimation, no EMA.
+
+```ts
+if (!ptsCalibrated || wallNow - lastCalibrationWall > 10_000) {
+  ptsCalibrationUs = headTs - rawAudioNowUs;
+  ptsCalibrated = true;
+  lastCalibrationWall = wallNow;
+}
+const audioNowUs = rawAudioNowUs + ptsCalibrationUs;
+```
+
+Calibration resets on `flush()` (seek) so the first post-seek frame
+calibrates before any PTS-based dropping occurs.
+
+Result: zero drops across all tested seek positions (8min, 23min,
+38min, 61min, 83min) on the 1h48m Blu-ray MKV.
+
+### Other bugs fixed in the same session
+
+1. **DTS audio not recognized.** mediabunny probe returned `"unknown"`
+   for DTS. Fix: re-probe with libav when mediabunny returns unknown
+   codecs. Added `"dts"` and `"truehd"` to AudioCodec type and
+   FALLBACK_AUDIO_CODECS.
+
+2. **Wrong strategy for native video + fallback audio.** H.264 + DTS
+   was routed to full WASM fallback (unwatchable at 1080p). Fix: route
+   to hybrid (WebCodecs video + libav audio) when video is native but
+   audio needs fallback.
+
+3. **Wrong libav variant loaded.** Hybrid decoder loaded `webcodecs`
+   variant (no DTS decoder) instead of `avbridge`. Fix: rewrite
+   variant picker to use allowlist (webcodecs-compatible codecs)
+   instead of denylist.
+
+4. **Audio decoded after video in hybrid pump.** DTS decode blocks
+   the main thread for 10-50ms, starving the renderer's rAF. Fix:
+   audio-first pump ordering + 4-packet sub-batches with yields.
+
+### Generalizable lesson
+
+**When comparing timestamps from two unsynchronized clock domains,
+absolute synchronization is impossible. The only viable solution is
+periodic re-alignment bounded by human perception.**
+
+The tempting approaches — continuous estimation (EMA), rate correction
+(two-point measurement), fixed calibration — all fail for different
+reasons:
+
+- **EMA**: if the measured quantity includes the correction, you get a
+  feedback loop
+- **Rate measurement**: needs steady-state data, but startup/seek
+  transients corrupt the signal
+- **Fixed offset**: handles epoch but not rate drift
+
+The correct model is: **treat calibration as a stateless periodic
+snap, not a continuously learned value.** Each snap is independent,
+has no memory of previous snaps, and bounds the maximum error to
+`drift_rate × snap_interval`. Choose the interval so that bound stays
+below the human perception threshold for the modality (lip sync:
+~100ms, audio continuity: ~20ms, visual continuity: ~40ms).
+
+This is how professional media players handle it too — audio is the
+master clock, video is periodically re-anchored to it, and the
+re-anchoring is invisible because it happens before drift becomes
+perceptible.
