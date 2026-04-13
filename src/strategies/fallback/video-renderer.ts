@@ -40,17 +40,6 @@ export class VideoRenderer {
   readonly firstFrameReady: Promise<void>;
   private resolveFirstFrame!: () => void;
 
-  /**
-   * Post-seek grace: after flush(), don't drop any frames as "late" until
-   * we've painted at least this many frames. After a seek, WebCodecs
-   * decodes from the nearest keyframe — those frames have PTS values
-   * BEFORE the seek target, so they'd all be dropped as "late" without
-   * this grace period. We paint them in sequence instead (slight visual
-   * catch-up is better than stutter/freeze).
-   */
-  private postFlushGrace = 0;
-  private static readonly POST_FLUSH_GRACE_FRAMES = 30;
-
   constructor(
     private readonly target: HTMLVideoElement,
     private readonly clock: ClockSource,
@@ -165,40 +154,69 @@ export class VideoRenderer {
       return;
     }
 
-    // Wall-clock-paced painting. Paint one frame every paintIntervalMs
-    // of wall time. The interval is reduced by 15% to compensate for rAF
-    // quantization at 60Hz — without this, 24fps content rounds to 50ms
-    // intervals (20fps effective) and drift correction drops frames to
-    // catch up. With the 15% reduction, we hit 33ms intervals (every 2
-    // rAFs) which is closer to the target and produces smoother playback.
-    const wallNow = performance.now();
-    const adjustedInterval = this.paintIntervalMs * 0.85;
-    if (wallNow - this.lastPaintWall < adjustedInterval - 2) return;
+    // PTS-based painting: find the latest frame whose presentation time
+    // has arrived (timestamp ≤ audio clock), paint it, and discard any
+    // older frames. This produces correct cadence at any display refresh
+    // rate and any source fps — no 3:2 pulldown artifacts.
+    //
+    // Fallback: if frame timestamps are unreliable (all zero, synthetic),
+    // fall back to wall-clock pacing as before.
+    const audioNowUs = this.clock.now() * 1_000_000;
+    const headTs = this.queue[0].timestamp ?? 0;
+    const hasPts = headTs > 0 || this.queue.length > 1;
 
-    if (this.queue.length === 0) return;
+    if (hasPts) {
+      // PTS mode: find the latest frame that should be displayed now.
+      //
+      // When the main thread blocks (DTS decode), rAF doesn't fire for
+      // 10-50ms. By the time we run, the audio clock has advanced and
+      // several frames may be "past." Dropping them all causes stutter.
+      //
+      // Instead: only drop frames that are MORE than one frame-duration
+      // behind the audio clock. Frames within one frame-duration are
+      // considered "on time" — the main-thread jank isn't the renderer's
+      // fault and dropping doesn't help the user.
+      const frameDurationUs = this.paintIntervalMs * 1000;
+      const deadlineUs = audioNowUs + frameDurationUs; // one frame of slack
 
-    // Coarse drift correction: compare the head frame's timestamp to
-    // audio.now() every ~2 sec (every 60 frames). Increased tolerance
-    // from 150ms to 300ms so main-thread jank from DTS decode doesn't
-    // trigger unnecessary drops. The correction is gentle — one frame
-    // per check.
-    if (this.framesPainted > 0 && this.framesPainted % 60 === 0) {
-      const audioNowUs = this.clock.now() * 1_000_000;
-      const headTs = this.queue[0].timestamp ?? 0;
-      const driftUs = headTs - audioNowUs;
-
-      if (this.postFlushGrace > 0) {
-        this.postFlushGrace--;
-      } else if (driftUs < -300_000) {
-        // Video behind audio by > 300ms — drop one frame to catch up.
-        this.queue.shift()?.close();
-        this.framesDroppedLate++;
-        if (this.queue.length === 0) return;
-      } else if (driftUs > 300_000) {
-        // Video ahead of audio by > 300ms — skip this paint cycle.
-        return;
+      let bestIdx = -1;
+      for (let i = 0; i < this.queue.length; i++) {
+        const ts = this.queue[i].timestamp ?? 0;
+        if (ts <= deadlineUs) {
+          bestIdx = i;
+        } else {
+          break;
+        }
       }
+
+      if (bestIdx < 0) return; // all frames in the future — wait
+
+      // Only drop frames that are more than 2 frame-durations behind.
+      // This tolerates main-thread jank without unnecessary drops.
+      const dropThresholdUs = audioNowUs - frameDurationUs * 2;
+      let dropped = 0;
+      while (bestIdx > 0) {
+        const ts = this.queue[0].timestamp ?? 0;
+        if (ts < dropThresholdUs) {
+          this.queue.shift()?.close();
+          this.framesDroppedLate++;
+          bestIdx--;
+          dropped++;
+        } else {
+          break;
+        }
+      }
+
+      const frame = this.queue.shift()!;
+      this.paint(frame);
+      frame.close();
+      this.lastPaintWall = performance.now();
+      return;
     }
+
+    // Wall-clock fallback: used when timestamps are unreliable (all zero).
+    const wallNow = performance.now();
+    if (wallNow - this.lastPaintWall < this.paintIntervalMs - 2) return;
 
     const frame = this.queue.shift()!;
     this.paint(frame);
@@ -231,7 +249,6 @@ export class VideoRenderer {
   flush(): void {
     while (this.queue.length > 0) this.queue.shift()?.close();
     this.prerolled = false;
-    this.postFlushGrace = VideoRenderer.POST_FLUSH_GRACE_FRAMES;
   }
 
   stats(): Record<string, unknown> {
