@@ -42,7 +42,24 @@ export async function probe(
 
   if (MEDIABUNNY_CONTAINERS.has(sniffed)) {
     try {
-      return await probeWithMediabunny(normalized, sniffed);
+      const result = await probeWithMediabunny(normalized, sniffed);
+      // If mediabunny returned unknown codecs, try libav which recognizes
+      // a wider range (DTS, TrueHD, etc.). Only escalate if there ARE
+      // tracks with unknown codecs — otherwise mediabunny's result is fine.
+      const hasUnknownCodec =
+        result.videoTracks.some((t) => t.codec === "unknown") ||
+        result.audioTracks.some((t) => t.codec === "unknown");
+      if (hasUnknownCodec) {
+        try {
+          const { probeWithLibav } = await import("./avi.js");
+          return await probeWithLibav(normalized, sniffed);
+        } catch {
+          // libav also failed — return mediabunny's result (unknown codecs
+          // are better than no result at all)
+          return result;
+        }
+      }
+      return result;
     } catch (mediabunnyErr) {
       // mediabunny rejected the file. Before giving up, try libav — it can
       // demux a much wider range of codec combinations in ISOBMFF/MKV/etc.

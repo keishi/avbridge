@@ -122,7 +122,14 @@ export function classifyContext(ctx: MediaContext): Classification {
       reason: `video codec "${video.codec}" has no browser decoder; WASM fallback required`,
     };
   }
-  if (audio && FALLBACK_AUDIO_CODECS.has(audio.codec)) {
+  // Audio codec needs WASM decode — either it's in the known fallback set
+  // or it's unrecognized ("unknown" / not in native set). Unknown codecs
+  // definitely can't play natively, so they get the same treatment.
+  const audioNeedsFallback = audio && (
+    FALLBACK_AUDIO_CODECS.has(audio.codec) ||
+    !NATIVE_AUDIO_CODECS.has(audio.codec)
+  );
+  if (audioNeedsFallback) {
     // If the VIDEO codec is native, prefer hybrid (WebCodecs hardware video
     // decode + libav software audio decode) over full WASM fallback. This is
     // critical for Blu-ray MKVs: H.264 1080p in WASM is unwatchably slow,
