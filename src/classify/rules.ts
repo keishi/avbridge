@@ -123,6 +123,19 @@ export function classifyContext(ctx: MediaContext): Classification {
     };
   }
   if (audio && FALLBACK_AUDIO_CODECS.has(audio.codec)) {
+    // If the VIDEO codec is native, prefer hybrid (WebCodecs hardware video
+    // decode + libav software audio decode) over full WASM fallback. This is
+    // critical for Blu-ray MKVs: H.264 1080p in WASM is unwatchably slow,
+    // but WebCodecs decodes it at full speed while libav handles the DTS/AC3
+    // audio in software.
+    if (NATIVE_VIDEO_CODECS.has(video.codec) && webCodecsAvailable()) {
+      return {
+        class: "HYBRID_CANDIDATE",
+        strategy: "hybrid",
+        reason: `video "${video.codec}" is hardware-decodable via WebCodecs; audio "${audio.codec}" decoded in software by libav`,
+        fallbackChain: ["fallback"],
+      };
+    }
     return {
       class: "FALLBACK_REQUIRED",
       strategy: "fallback",

@@ -338,6 +338,42 @@ describe("classify: isSafeNativeCombo", () => {
     expect(c.strategy).toBe("fallback");
   });
 
+  it("native video + fallback audio → hybrid when WebCodecs available", () => {
+    // Simulate WebCodecs availability
+    (globalThis as unknown as Record<string, unknown>).VideoDecoder = class {};
+    try {
+      const c = classify(
+        ctx({
+          container: "mkv",
+          videoTracks: [
+            { id: 0, codec: "h264", pixelFormat: "yuv420p", bitDepth: 8, width: 1920, height: 1080 },
+          ],
+          audioTracks: [{ id: 1, codec: "dts", channels: 6, sampleRate: 48000 }],
+        }),
+      );
+      // H.264 can be hardware-decoded via WebCodecs; DTS decoded in software
+      expect(c.strategy).toBe("hybrid");
+      expect(c.class).toBe("HYBRID_CANDIDATE");
+      expect(c.fallbackChain).toEqual(["fallback"]);
+    } finally {
+      delete (globalThis as unknown as Record<string, unknown>).VideoDecoder;
+    }
+  });
+
+  it("native video + fallback audio → fallback when no WebCodecs", () => {
+    const c = classify(
+      ctx({
+        container: "mkv",
+        videoTracks: [
+          { id: 0, codec: "h264", pixelFormat: "yuv420p", bitDepth: 8, width: 1920, height: 1080 },
+        ],
+        audioTracks: [{ id: 1, codec: "dts", channels: 6, sampleRate: 48000 }],
+      }),
+    );
+    // No WebCodecs → full WASM fallback
+    expect(c.strategy).toBe("fallback");
+  });
+
   it("vp9 in webm is native", () => {
     const c = classify(
       ctx({
