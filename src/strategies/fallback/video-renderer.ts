@@ -40,6 +40,17 @@ export class VideoRenderer {
   readonly firstFrameReady: Promise<void>;
   private resolveFirstFrame!: () => void;
 
+  /**
+   * Post-seek grace: after flush(), don't drop any frames as "late" until
+   * we've painted at least this many frames. After a seek, WebCodecs
+   * decodes from the nearest keyframe — those frames have PTS values
+   * BEFORE the seek target, so they'd all be dropped as "late" without
+   * this grace period. We paint them in sequence instead (slight visual
+   * catch-up is better than stutter/freeze).
+   */
+  private postFlushGrace = 0;
+  private static readonly POST_FLUSH_GRACE_FRAMES = 30;
+
   constructor(
     private readonly target: HTMLVideoElement,
     private readonly clock: ClockSource,
@@ -191,19 +202,26 @@ export class VideoRenderer {
 
       if (bestIdx < 0) return; // all frames in the future — wait
 
-      // Only drop frames that are more than 2 frame-durations behind.
-      // This tolerates main-thread jank without unnecessary drops.
-      const dropThresholdUs = audioNowUs - frameDurationUs * 2;
-      let dropped = 0;
-      while (bestIdx > 0) {
-        const ts = this.queue[0].timestamp ?? 0;
-        if (ts < dropThresholdUs) {
-          this.queue.shift()?.close();
-          this.framesDroppedLate++;
-          bestIdx--;
-          dropped++;
-        } else {
-          break;
+      // During post-seek grace period, don't drop ANY frames — just paint
+      // them in sequence. The first ~30 frames after a seek may have PTS
+      // before the seek target (keyframe GOP decode) and would all be
+      // mass-dropped otherwise, causing a freeze or 3fps stutter.
+      if (this.postFlushGrace > 0) {
+        this.postFlushGrace--;
+        // Just paint the head frame, no drops
+        bestIdx = 0;
+      } else {
+        // Normal: drop frames more than 2 frame-durations behind.
+        const dropThresholdUs = audioNowUs - frameDurationUs * 2;
+        while (bestIdx > 0) {
+          const ts = this.queue[0].timestamp ?? 0;
+          if (ts < dropThresholdUs) {
+            this.queue.shift()?.close();
+            this.framesDroppedLate++;
+            bestIdx--;
+          } else {
+            break;
+          }
         }
       }
 
@@ -249,6 +267,7 @@ export class VideoRenderer {
   flush(): void {
     while (this.queue.length > 0) this.queue.shift()?.close();
     this.prerolled = false;
+    this.postFlushGrace = VideoRenderer.POST_FLUSH_GRACE_FRAMES;
   }
 
   stats(): Record<string, unknown> {
