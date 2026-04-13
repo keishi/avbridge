@@ -20,6 +20,13 @@ import type { ClockSource } from "./audio-output.js";
  * decoder was still warming up, and every frame was already in the past by
  * the time it landed in the queue.
  */
+// Periodic debug log — throttled to once per second so it doesn't
+// flood the console at 60Hz rAF rate.
+function isDebug(): boolean {
+  return typeof globalThis !== "undefined" && !!(globalThis as Record<string, unknown>).AVBRIDGE_DEBUG;
+}
+let lastDebugLog = 0;
+
 export class VideoRenderer {
   private canvas: HTMLCanvasElement;
   private ctx: CanvasRenderingContext2D;
@@ -35,6 +42,20 @@ export class VideoRenderer {
   private lastPaintWall = 0;
   /** Minimum ms between paints — paces video at roughly source fps. */
   private paintIntervalMs: number;
+  /** Cumulative count of frames skipped because all PTS are in the future. */
+  private ticksWaiting = 0;
+  /** Cumulative count of ticks where PTS mode painted a frame. */
+  private ticksPainted = 0;
+
+  /**
+   * Calibration offset (microseconds) between video PTS and audio clock.
+   * Video PTS and AudioContext.currentTime can drift ~0.1% relative to
+   * each other (different clock domains). Over 45 minutes that's 2.6s.
+   * We measure the offset on the first painted frame and update it
+   * periodically so the PTS comparison stays calibrated.
+   */
+  private ptsCalibrationUs = 0;
+  private ptsCalibrated = false;
 
   /** Resolves once the first decoded frame has been enqueued. */
   readonly firstFrameReady: Promise<void>;
@@ -161,23 +182,23 @@ export class VideoRenderer {
     //
     // Fallback: if frame timestamps are unreliable (all zero, synthetic),
     // fall back to wall-clock pacing as before.
-    const audioNowUs = this.clock.now() * 1_000_000;
+    const rawAudioNowUs = this.clock.now() * 1_000_000;
     const headTs = this.queue[0].timestamp ?? 0;
     const hasPts = headTs > 0 || this.queue.length > 1;
 
     if (hasPts) {
-      // PTS mode: find the latest frame that should be displayed now.
-      //
-      // When the main thread blocks (DTS decode), rAF doesn't fire for
-      // 10-50ms. By the time we run, the audio clock has advanced and
-      // several frames may be "past." Dropping them all causes stutter.
-      //
-      // Instead: only drop frames that are MORE than one frame-duration
-      // behind the audio clock. Frames within one frame-duration are
-      // considered "on time" — the main-thread jank isn't the renderer's
-      // fault and dropping doesn't help the user.
+      // On first tick after start/seek, snap calibration to the head frame
+      // BEFORE doing the PTS search. Otherwise the raw audio clock (which
+      // can be seconds ahead of video PTS due to timebase drift) causes
+      // mass-drops of the initial GOP frames.
+      if (!this.ptsCalibrated) {
+        this.ptsCalibrationUs = headTs - rawAudioNowUs;
+        this.ptsCalibrated = true;
+      }
+
+      const audioNowUs = rawAudioNowUs + this.ptsCalibrationUs;
       const frameDurationUs = this.paintIntervalMs * 1000;
-      const deadlineUs = audioNowUs + frameDurationUs; // one frame of slack
+      const deadlineUs = audioNowUs + frameDurationUs;
 
       let bestIdx = -1;
       for (let i = 0; i < this.queue.length; i++) {
@@ -189,10 +210,27 @@ export class VideoRenderer {
         }
       }
 
-      if (bestIdx < 0) return; // all frames in the future — wait
+      if (bestIdx < 0) {
+        this.ticksWaiting++;
+        if (isDebug()) {
+          const now = performance.now();
+          if (now - lastDebugLog > 1000) {
+            const headPtsMs = (headTs / 1000).toFixed(1);
+            const audioMs = (audioNowUs / 1000).toFixed(1);
+            const rawDriftMs = ((headTs - rawAudioNowUs) / 1000).toFixed(1);
+            const calibMs = (this.ptsCalibrationUs / 1000).toFixed(1);
+            // eslint-disable-next-line no-console
+            console.log(
+              `[avbridge:renderer] WAIT q=${this.queue.length} headPTS=${headPtsMs}ms calibAudio=${audioMs}ms ` +
+              `rawDrift=${rawDriftMs}ms calib=${calibMs}ms painted=${this.framesPainted} dropped=${this.framesDroppedLate}`,
+            );
+            lastDebugLog = now;
+          }
+        }
+        return;
+      }
 
       // Only drop frames that are more than 2 frame-durations behind.
-      // This tolerates main-thread jank without unnecessary drops.
       const dropThresholdUs = audioNowUs - frameDurationUs * 2;
       let dropped = 0;
       while (bestIdx > 0) {
@@ -204,6 +242,39 @@ export class VideoRenderer {
           dropped++;
         } else {
           break;
+        }
+      }
+
+      this.ticksPainted++;
+
+      // Update calibration from the frame we're about to paint.
+      // EMA smoothing (alpha=0.05) tracks the ~0.1% rate drift between
+      // video PTS and audio clock without jumping on single-frame noise.
+      // On first paint (or after seek), snap to the measured offset.
+      const paintedFrame = this.queue[0];
+      const paintedPts = paintedFrame?.timestamp ?? 0;
+      const measuredOffset = paintedPts - rawAudioNowUs;
+      if (!this.ptsCalibrated) {
+        this.ptsCalibrationUs = measuredOffset;
+        this.ptsCalibrated = true;
+      } else {
+        this.ptsCalibrationUs = 0.95 * this.ptsCalibrationUs + 0.05 * measuredOffset;
+      }
+
+      if (isDebug()) {
+        const now = performance.now();
+        if (now - lastDebugLog > 1000) {
+          const paintedTs = (this.queue[0]?.timestamp ?? 0);
+          const audioMs = (audioNowUs / 1000).toFixed(1);
+          const ptsMs = (paintedTs / 1000).toFixed(1);
+          const rawDriftMs = ((paintedTs - rawAudioNowUs) / 1000).toFixed(1);
+          const calibMs = (this.ptsCalibrationUs / 1000).toFixed(1);
+          // eslint-disable-next-line no-console
+          console.log(
+            `[avbridge:renderer] PAINT q=${this.queue.length} calibAudio=${audioMs}ms nextPTS=${ptsMs}ms ` +
+            `rawDrift=${rawDriftMs}ms calib=${calibMs}ms dropped=${dropped} total_drops=${this.framesDroppedLate} painted=${this.framesPainted}`,
+          );
+          lastDebugLog = now;
         }
       }
 
@@ -247,8 +318,14 @@ export class VideoRenderer {
 
   /** Discard all queued frames. Used by seek to drop stale buffers. */
   flush(): void {
+    const count = this.queue.length;
     while (this.queue.length > 0) this.queue.shift()?.close();
     this.prerolled = false;
+    this.ptsCalibrated = false; // recalibrate at new seek position
+    if (isDebug() && count > 0) {
+      // eslint-disable-next-line no-console
+      console.log(`[avbridge:renderer] FLUSH discarded=${count} painted=${this.framesPainted} drops=${this.framesDroppedLate}`);
+    }
   }
 
   stats(): Record<string, unknown> {
