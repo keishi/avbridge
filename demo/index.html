@@ -2,86 +2,94 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width,initial-scale=1" />
-    <title>avbridge.js demo</title>
+    <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black" />
+    <meta name="description" content="avbridge.js — VLC-style media playback for the browser. Play any video file." />
+    <title>avbridge.js</title>
     <style>
-      :root { color-scheme: dark; }
-      body { font-family: system-ui, sans-serif; background: #111; color: #eee; margin: 0; padding: 24px; max-width: 960px; margin: 0 auto; }
-      h1 { margin-top: 0; }
+      :root { color-scheme: dark; --accent: #5b9; --bg: #111; --surface: #1a1a1a; --text: #eee; --text-dim: #aaa; }
+      * { box-sizing: border-box; margin: 0; }
+      body { font-family: system-ui, -apple-system, sans-serif; background: var(--bg); color: var(--text); -webkit-text-size-adjust: 100%; }
 
-      .player { position: relative; background: #000; aspect-ratio: 16/9; }
-      .player video,
-      .player avbridge-video { width: 100%; height: 100%; display: block; }
-      avbridge-video::part(video) { background: #000; }
+      /* ── Layout ──────────────────────────────────────────────── */
+      .site { max-width: 960px; margin: 0 auto; padding: 16px; }
 
-      .controls { display: flex; gap: 12px; align-items: center; padding: 10px 12px; background: #1a1a1a; border-radius: 0 0 6px 6px; }
-      .controls button { background: #333; color: #eee; border: none; padding: 6px 12px; border-radius: 4px; font-size: 14px; cursor: pointer; min-width: 44px; }
-      .controls button:hover:not(:disabled) { background: #444; }
-      .controls button:disabled { opacity: 0.4; cursor: not-allowed; }
-      .strat-btn { background: #333; color: #eee; border: none; padding: 4px 10px; border-radius: 4px; font-size: 12px; cursor: pointer; }
-      .strat-btn:hover { background: #444; }
-      .strat-btn.active { outline: 2px solid #5b9; }
-      .controls input[type="range"] { flex: 1; accent-color: #5b9; }
-      .controls .time { font-variant-numeric: tabular-nums; font-size: 12px; color: #aaa; min-width: 90px; text-align: right; }
+      /* ── Header ──────────────────────────────────────────────── */
+      .header { display: flex; align-items: baseline; gap: 16px; margin-bottom: 12px; flex-wrap: wrap; }
+      .header h1 { font-size: clamp(18px, 4vw, 24px); font-weight: 700; }
+      .header nav { display: flex; gap: 12px; font-size: 14px; }
+      .header nav a { color: var(--accent); text-decoration: none; }
+      .header nav a:hover { text-decoration: underline; }
+      .header nav a.active { font-weight: 600; }
+      .tagline { color: var(--text-dim); font-size: 14px; margin-bottom: 16px; }
 
-      .badge { display: inline-block; padding: 4px 10px; border-radius: 12px; font-size: 12px; font-weight: 600; background: #333; }
-      .badge.native { background: #2d6a4f; }
-      .badge.remux  { background: #1e6091; }
-      .badge.fallback { background: #9d4edd; }
-      .badge.hybrid { background: #c77dff; }
-      .badge.buffering { background: #b58000; }
+      /* ── Player ──────────────────────────────────────────────── */
+      .player-wrap { width: 100%; aspect-ratio: 16/9; background: #000; border-radius: 8px; overflow: hidden; touch-action: none; }
+      .player-wrap avbridge-player { width: 100%; height: 100%; }
 
-      .row { display: flex; gap: 16px; align-items: center; margin: 16px 0; flex-wrap: wrap; }
-      input[type="file"] { color: #eee; }
-      details { margin-top: 16px; background: #1a1a1a; padding: 12px; border-radius: 8px; }
-      pre { white-space: pre-wrap; word-break: break-word; font-size: 12px; }
-      label { font-size: 14px; }
-      .err { color: #ff8585; }
+      /* ── File picker ─────────────────────────────────────────── */
+      .picker { display: flex; gap: 12px; align-items: center; margin: 16px 0; flex-wrap: wrap; }
+      .picker label { font-size: 14px; color: var(--text-dim); }
+      .picker input[type="file"] { color: var(--text); font-size: 14px; max-width: 100%; }
+
+      /* ── Diagnostics ─────────────────────────────────────────── */
+      details { margin-top: 16px; background: var(--surface); padding: 12px; border-radius: 8px; }
+      details summary { cursor: pointer; font-size: 14px; color: var(--text-dim); }
+      pre { white-space: pre-wrap; word-break: break-word; font-size: 12px; margin-top: 8px; }
+
+      .err { color: #ff8585; margin-top: 8px; font-size: 14px; }
+
+      /* ── Footer ──────────────────────────────────────────────── */
+      .footer { margin-top: 24px; padding-top: 16px; border-top: 1px solid #222; font-size: 12px; color: var(--text-dim); }
+      .footer a { color: var(--accent); text-decoration: none; }
+
+      /* ── Mobile ──────────────────────────────────────────────── */
+      @media (max-width: 600px) {
+        .site { padding: 8px; }
+        .picker { gap: 8px; }
+      }
     </style>
   </head>
   <body>
-    <h1>avbridge.js demo</h1>
-    <p>
-      <a href="./" style="color:#5b9;">Classic Player</a> ·
-      <a href="./player.html" style="color:#5b9;">New Player</a> ·
-      <a href="./convert.html" style="color:#5b9;">Converter</a>
-    </p>
-    <p>Pick a local media file. avbridge will probe it, classify it, and choose the best playback strategy.</p>
+    <div class="site">
+      <div class="header">
+        <h1>avbridge.js</h1>
+        <nav>
+          <a href="./" class="active">Player</a>
+          <a href="./convert.html">Converter</a>
+        </nav>
+      </div>
+      <p class="tagline">VLC-style media playback for the browser. Pick any video file — avbridge.js probes, classifies, and plays it.</p>
 
-    <div class="row">
-      <label>Media file: <input id="file" type="file" accept="video/*,audio/*,.mkv,.avi,.wmv,.flv,.mov,.rm,.rmvb" /></label>
-      <label>Subtitle (optional): <input id="subs" type="file" accept=".srt,.vtt" /></label>
-      <span id="badge" class="badge">no file</span>
+      <div class="player-wrap">
+        <avbridge-player id="player"></avbridge-player>
+      </div>
+
+      <div class="picker">
+        <label>Media file: <input id="file" type="file" accept="video/*,audio/*,.mkv,.avi,.wmv,.flv,.mov,.rm,.rmvb" /></label>
+        <label>Subtitle: <input id="subs" type="file" accept=".srt,.vtt" /></label>
+      </div>
+
+      <p id="error" class="err"></p>
+
+      <details>
+        <summary>Diagnostics</summary>
+        <pre id="diagnostics">{}</pre>
+      </details>
+
+      <div class="footer">
+        <a href="https://github.com/keishi/avbridge">GitHub</a> ·
+        <a href="https://www.npmjs.com/package/avbridge">npm</a> ·
+        MIT License
+      </div>
     </div>
-
-    <div class="player">
-      <avbridge-video id="player"></avbridge-video>
-    </div>
-    <div class="controls">
-      <button id="playPause" disabled>▶</button>
-      <input id="seek" type="range" min="0" max="0" step="0.01" value="0" disabled />
-      <span id="time" class="time">0:00 / 0:00</span>
-    </div>
-
-    <div class="row" id="strategy-switcher" style="display:none;">
-      <span style="font-size:13px;color:#aaa;">Switch backend:</span>
-      <button class="strat-btn" data-strategy="native">native</button>
-      <button class="strat-btn" data-strategy="remux">remux</button>
-      <button class="strat-btn" data-strategy="hybrid">hybrid</button>
-      <button class="strat-btn" data-strategy="fallback">fallback</button>
-    </div>
-
-    <p id="error" class="err"></p>
-
-    <details open>
-      <summary>Diagnostics</summary>
-      <pre id="diagnostics">{}</pre>
-    </details>
 
     <script src="coi-serviceworker.js"></script>
     <script>
       window.AVBRIDGE_LIBAV_BASE = new URL("libav", document.baseURI).pathname;
     </script>
-    <script type="module" src="./main.ts"></script>
+    <script type="module" src="./player-demo.ts"></script>
   </body>
 </html>

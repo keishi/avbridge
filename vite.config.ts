@@ -171,7 +171,6 @@ export default defineConfig(({ command }) => ({
     rollupOptions: {
       input: {
         main: resolve(__dirname, "demo/index.html"),
-        player: resolve(__dirname, "demo/player.html"),
         convert: resolve(__dirname, "demo/convert.html"),
         elementTest: resolve(__dirname, "demo/element-test.html"),
       },

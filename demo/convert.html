@@ -2,20 +2,28 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width,initial-scale=1" />
-    <title>avbridge.js converter</title>
+    <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no" />
+    <meta name="description" content="avbridge.js — Convert media files into modern browser-friendly formats." />
+    <title>avbridge.js — Converter</title>
     <style>
-      :root { color-scheme: dark; }
+      :root { color-scheme: dark; --accent: #5b9; --bg: #111; --surface: #1a1a1a; --text: #eee; --text-dim: #aaa; }
+      * { box-sizing: border-box; margin: 0; }
       body {
-        font-family: system-ui, sans-serif;
-        background: #111;
-        color: #eee;
-        margin: 0 auto;
-        padding: 24px;
-        max-width: 800px;
+        font-family: system-ui, -apple-system, sans-serif;
+        background: var(--bg);
+        color: var(--text);
+        -webkit-text-size-adjust: 100%;
       }
-      h1 { margin-top: 0; }
-      a { color: #5b9; }
+      .site { max-width: 960px; margin: 0 auto; padding: 16px; }
+      a { color: var(--accent); text-decoration: none; }
+      a:hover { text-decoration: underline; }
+
+      .header { display: flex; align-items: baseline; gap: 16px; margin-bottom: 12px; flex-wrap: wrap; }
+      .header h1 { font-size: clamp(18px, 4vw, 24px); font-weight: 700; }
+      .header nav { display: flex; gap: 12px; font-size: 14px; }
+      .header nav a.active { font-weight: 600; }
+      .tagline { color: var(--text-dim); font-size: 14px; margin-bottom: 16px; }
+      .footer { margin-top: 24px; padding-top: 16px; border-top: 1px solid #222; font-size: 12px; color: var(--text-dim); }
 
       .card {
         background: #1a1a1a;
@@ -129,12 +137,15 @@
     </style>
   </head>
   <body>
-    <h1>avbridge.js converter</h1>
-    <p>
-      <a href="./">Player</a> ·
-      <a href="./convert.html">Converter</a>
-    </p>
-    <p>Convert media files into modern browser-friendly formats. Powered by mediabunny + WebCodecs.</p>
+    <div class="site">
+    <div class="header">
+      <h1>avbridge.js</h1>
+      <nav>
+        <a href="./">Player</a>
+        <a href="./convert.html" class="active">Converter</a>
+      </nav>
+    </div>
+    <p class="tagline">Convert media files into modern browser-friendly formats. Powered by mediabunny + WebCodecs.</p>
 
     <div class="card">
       <h2>1. Source</h2>
@@ -236,6 +247,13 @@
       <summary>Result info</summary>
       <pre id="result-info" class="info">No conversion run yet.</pre>
     </details>
+
+    <div class="footer">
+      <a href="https://github.com/keishi/avbridge">GitHub</a> ·
+      <a href="https://www.npmjs.com/package/avbridge">npm</a> ·
+      MIT License
+    </div>
+    </div><!-- .site -->
 
     <script>
       // See demo/index.html for why this is needed in Vite dev mode.
