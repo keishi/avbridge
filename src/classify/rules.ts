@@ -13,8 +13,9 @@ import { mp4MimeFor, mseSupports } from "../util/codec-strings.js";
  * Codecs we know `<video>` and MSE support across modern desktop + Android.
  * The decision to remux instead of decode hinges on this list.
  */
-const NATIVE_VIDEO_CODECS = new Set<VideoCodec>(["h264", "h265", "vp8", "vp9", "av1"]);
-const NATIVE_AUDIO_CODECS = new Set<AudioCodec>([
+/** Codecs the browser can decode natively (also the set WebCodecs can transcode). */
+export const NATIVE_VIDEO_CODECS = new Set<VideoCodec>(["h264", "h265", "vp8", "vp9", "av1"]);
+export const NATIVE_AUDIO_CODECS = new Set<AudioCodec>([
   "aac",
   "mp3",
   "opus",
@@ -25,12 +26,12 @@ const NATIVE_AUDIO_CODECS = new Set<AudioCodec>([
 /**
  * Codecs no major browser plays, period. These force the WASM fallback.
  */
-const FALLBACK_VIDEO_CODECS = new Set<VideoCodec>([
+export const FALLBACK_VIDEO_CODECS = new Set<VideoCodec>([
   "wmv3", "vc1", "mpeg4",
   "rv10", "rv20", "rv30", "rv40",
   "mpeg2", "mpeg1", "theora",
 ]);
-const FALLBACK_AUDIO_CODECS = new Set<AudioCodec>([
+export const FALLBACK_AUDIO_CODECS = new Set<AudioCodec>([
   "wmav2", "wmapro", "ac3", "eac3",
   "cook", "ra_144", "ra_288", "sipr", "atrac3",
 ]);

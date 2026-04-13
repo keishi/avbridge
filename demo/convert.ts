@@ -7,6 +7,7 @@ import {
   classify,
   remux,
   transcode,
+  NATIVE_AUDIO_CODECS,
   type MediaContext,
   type Classification,
   type ConvertResult,
@@ -80,6 +81,9 @@ const MODERN_CODECS = new Set([
   "h264", "h265", "vp8", "vp9", "av1",
   "aac", "opus", "flac", "mp3", "vorbis",
 ]);
+
+/** Audio codecs that WebCodecs / mediabunny can decode for transcoding. */
+const TRANSCODABLE_AUDIO = NATIVE_AUDIO_CODECS;
 
 function isModernCodec(codec: string | undefined): boolean {
   if (!codec) return true;
@@ -235,6 +239,18 @@ fileInput.addEventListener("change", async () => {
   sourceInfo.textContent = lines.join("\n");
   sourceInfo.classList.remove("hidden");
 
+  // Pre-flight: warn about unsupported audio codecs
+  const codecWarning = document.getElementById("codec-warning")!;
+  if (a && !TRANSCODABLE_AUDIO.has(a.codec)) {
+    codecWarning.textContent =
+      `\u26a0 Audio codec "${a.codec}" cannot be decoded by WebCodecs. ` +
+      `Transcoding will proceed without audio (video only). ` +
+      `Use "Copy" for audio codec to remux the original audio stream instead.`;
+    codecWarning.classList.remove("hidden");
+  } else {
+    codecWarning.classList.add("hidden");
+  }
+
   applySmartDefaults();
   startBtn.disabled = false;
   statusEl.textContent = "";
@@ -284,10 +300,20 @@ startBtn.addEventListener("click", async () => {
       const sourceAudio = currentContext?.audioTracks[0]?.codec;
       const videoBitrateKbps = videoBitrateInput.value ? parseInt(videoBitrateInput.value, 10) : undefined;
       const audioBitrateKbps = audioBitrateInput.value ? parseInt(audioBitrateInput.value, 10) : undefined;
+
+      // Auto-drop audio if the source codec can't be decoded by WebCodecs
+      const audioUnsupported = sourceAudio != null && !TRANSCODABLE_AUDIO.has(sourceAudio);
+      const needsTranscodeAudio = a !== "copy";
+      const shouldDropAudio = audioUnsupported && needsTranscodeAudio;
+      if (shouldDropAudio) {
+        statusEl.textContent += ` (dropping unsupported "${sourceAudio}" audio)`;
+      }
+
       result = await transcode(currentFile, {
         outputFormat,
         videoCodec: (v === "copy" ? (sourceVideo as OutputVideoCodec) : v) as OutputVideoCodec,
-        audioCodec: (a === "copy" ? (sourceAudio as OutputAudioCodec) : a) as OutputAudioCodec,
+        audioCodec: shouldDropAudio ? undefined : (a === "copy" ? (sourceAudio as OutputAudioCodec) : a) as OutputAudioCodec,
+        dropAudio: shouldDropAudio || undefined,
         quality: qualitySelect.value as TranscodeQuality,
         videoBitrate: videoBitrateKbps ? videoBitrateKbps * 1000 : undefined,
         audioBitrate: audioBitrateKbps ? audioBitrateKbps * 1000 : undefined,

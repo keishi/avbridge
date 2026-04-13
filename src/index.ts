@@ -39,6 +39,12 @@ export type {
 } from "./types.js";
 
 export { classify } from "./classify/index.js";
+export {
+  NATIVE_VIDEO_CODECS,
+  NATIVE_AUDIO_CODECS,
+  FALLBACK_VIDEO_CODECS,
+  FALLBACK_AUDIO_CODECS,
+} from "./classify/rules.js";
 export { probe } from "./probe/index.js";
 export { remux, transcode } from "./convert/index.js";
 export { srtToVtt } from "./subtitles/srt.js";
