@@ -41,7 +41,32 @@ export default defineConfig([
     ],
   },
 
-  // 2. Pre-bundled browser entry: `dist/element-browser.js`.
+  // 2. Player entry: `<avbridge-player>` controls-bearing element.
+  //
+  //    Separate from the index/element build so code-splitting doesn't
+  //    move shared chunks out of the element entry (which would break
+  //    the bundle-audit eager-size check for element-only). The player
+  //    imports avbridge/element internally and includes the full engine.
+  {
+    entry: {
+      player: "src/player-element.ts",
+    },
+    format: ["esm", "cjs"],
+    dts: true,
+    sourcemap: true,
+    clean: false,
+    target: "es2022",
+    platform: "browser",
+    splitting: true,
+    treeshake: true,
+    external: [
+      "@libav.js/variant-webcodecs",
+      "@libav.js/types",
+      "libavjs-webcodecs-bridge",
+    ],
+  },
+
+  // 3. Pre-bundled browser entry: `dist/element-browser.js`.
   //
   //    Single-file output intended for direct `<script type="module">`
   //    consumption without a bundler. Every bare-specifier dependency is

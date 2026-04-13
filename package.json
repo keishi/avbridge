@@ -35,6 +35,8 @@
   "sideEffects": [
     "./dist/element.js",
     "./dist/element.cjs",
+    "./dist/player.js",
+    "./dist/player.cjs",
     "./dist/element-browser.js"
   ],
   "main": "./dist/index.cjs",
@@ -50,6 +52,11 @@
       "types": "./dist/element.d.ts",
       "import": "./dist/element.js",
       "require": "./dist/element.cjs"
+    },
+    "./player": {
+      "types": "./dist/player.d.ts",
+      "import": "./dist/player.js",
+      "require": "./dist/player.cjs"
     },
     "./element-browser": {
       "types": "./dist/element.d.ts",
