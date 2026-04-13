@@ -11,6 +11,7 @@
  */
 
 import { probe } from "../probe/index.js";
+import { isAnnexB, annexBToAvcc } from "../strategies/remux/annexb.js";
 import {
   avbridgeVideoToMediabunny,
   avbridgeAudioToMediabunny,
@@ -303,6 +304,13 @@ async function doLibavRemux(
           syntheticVideoUs += videoFrameStepUs;
           return ts;
         }, videoTimeBase);
+
+        // libav demuxes AVI/ASF/FLV H.264 as Annex B (start-code framed),
+        // but mediabunny's fMP4 muxer expects AVCC (length-prefixed). Convert
+        // on the fly. The check is cheap: isAnnexB reads 4 bytes at the head.
+        if (videoTrackInfo && (videoTrackInfo.codec === "h264" || videoTrackInfo.codec === "h265") && isAnnexB(pkt.data)) {
+          pkt.data = annexBToAvcc(pkt.data);
+        }
 
         const mbPacket = libavPacketToMediAbunny(mb, pkt);
         await videoSource.add(
