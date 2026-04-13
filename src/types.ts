@@ -69,6 +69,8 @@ export type AudioCodec =
   | "ra_288" // RealAudio 2.0 (28.8 kbps)
   | "sipr" // RealAudio Sipr (voice codec)
   | "atrac3" // Sony ATRAC3 (sometimes seen in .rm)
+  | "dts" // DTS (common in Blu-ray MKV rips)
+  | "truehd" // Dolby TrueHD (Blu-ray lossless)
   | (string & {});
 
 export interface VideoTrackInfo {

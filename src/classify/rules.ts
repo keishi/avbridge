@@ -34,6 +34,7 @@ export const FALLBACK_VIDEO_CODECS = new Set<VideoCodec>([
 export const FALLBACK_AUDIO_CODECS = new Set<AudioCodec>([
   "wmav2", "wmapro", "ac3", "eac3",
   "cook", "ra_144", "ra_288", "sipr", "atrac3",
+  "dts", "truehd",
 ]);
 
 /**

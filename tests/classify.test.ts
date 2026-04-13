@@ -466,7 +466,7 @@ describe("classify: fallback codec routing", () => {
     });
   }
 
-  const fallbackAudioCodecs = ["wmav2", "wmapro", "ac3", "eac3", "cook", "ra_144", "ra_288", "sipr", "atrac3"] as const;
+  const fallbackAudioCodecs = ["wmav2", "wmapro", "ac3", "eac3", "cook", "ra_144", "ra_288", "sipr", "atrac3", "dts", "truehd"] as const;
   for (const codec of fallbackAudioCodecs) {
     it(`routes native video + ${codec} audio to fallback`, () => {
       const c = classify(

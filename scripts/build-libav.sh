@@ -106,6 +106,12 @@ read -r -d '' VARIANT_FRAGMENTS <<'EOF' || true
   "decoder-ra_288",
   "decoder-sipr",
   "decoder-atrac3",
+  "decoder-dca",
+  "decoder-truehd",
+  "decoder-mlp",
+  "decoder-theora",
+
+  "parser-dca",
 
   "bsf-mpeg4_unpack_bframes"
 ]

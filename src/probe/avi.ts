@@ -205,6 +205,10 @@ function ffmpegToAvbridgeAudio(name: string): AudioCodec {
     case "ra_288": return "ra_288";
     case "sipr":   return "sipr";
     case "atrac3": return "atrac3";
+    case "dca":
+    case "dts":    return "dts";
+    case "truehd":
+    case "mlp":    return "truehd";
     default:       return name as AudioCodec;
   }
 }
