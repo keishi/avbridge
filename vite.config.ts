@@ -158,8 +158,9 @@ function serveVendorLibav(): Plugin {
 
 export default defineConfig(({ command }) => ({
   root: "demo",
-  // GitHub Pages serves from /avbridge/; dev server serves from /
-  base: command === "build" ? "/avbridge/" : "/",
+  // Use relative paths so the build works at any base URL — GitHub Pages
+  // (/avbridge/), local preview (/), or any other hosting.
+  base: command === "build" ? "./" : "/",
   plugins: [crossOriginIsolation(), serveVendorLibav()],
   resolve: {
     alias: {
