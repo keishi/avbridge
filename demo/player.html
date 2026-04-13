@@ -56,8 +56,9 @@
       <pre id="diagnostics">{}</pre>
     </details>
 
+    <script src="./public/coi-serviceworker.js"></script>
     <script>
-      window.AVBRIDGE_LIBAV_BASE = "/libav";
+      window.AVBRIDGE_LIBAV_BASE = new URL("libav", document.baseURI).pathname;
     </script>
     <script type="module" src="./player-demo.ts"></script>
   </body>

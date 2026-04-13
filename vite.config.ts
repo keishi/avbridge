@@ -156,8 +156,10 @@ function serveVendorLibav(): Plugin {
   };
 }
 
-export default defineConfig({
+export default defineConfig(({ command }) => ({
   root: "demo",
+  // GitHub Pages serves from /avbridge/; dev server serves from /
+  base: command === "build" ? "/avbridge/" : "/",
   plugins: [crossOriginIsolation(), serveVendorLibav()],
   resolve: {
     alias: {
@@ -168,6 +170,7 @@ export default defineConfig({
     rollupOptions: {
       input: {
         main: resolve(__dirname, "demo/index.html"),
+        player: resolve(__dirname, "demo/player.html"),
         convert: resolve(__dirname, "demo/convert.html"),
         elementTest: resolve(__dirname, "demo/element-test.html"),
       },
@@ -191,4 +194,4 @@ export default defineConfig({
       "libavjs-webcodecs-bridge",
     ],
   },
-});
+}));
