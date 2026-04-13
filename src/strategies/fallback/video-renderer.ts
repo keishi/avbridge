@@ -56,6 +56,7 @@ export class VideoRenderer {
    */
   private ptsCalibrationUs = 0;
   private ptsCalibrated = false;
+  private lastCalibrationWall = 0;
 
   /** Resolves once the first decoded frame has been enqueued. */
   readonly firstFrameReady: Promise<void>;
@@ -187,13 +188,16 @@ export class VideoRenderer {
     const hasPts = headTs > 0 || this.queue.length > 1;
 
     if (hasPts) {
-      // On first tick after start/seek, snap calibration to the head frame
-      // BEFORE doing the PTS search. Otherwise the raw audio clock (which
-      // can be seconds ahead of video PTS due to timebase drift) causes
-      // mass-drops of the initial GOP frames.
-      if (!this.ptsCalibrated) {
+      // Calibration: video PTS and audio clock (AudioContext.currentTime)
+      // live in different clock domains with a fixed offset (different epoch)
+      // plus a small rate drift (~7ms/s). We snap the offset on first paint
+      // and re-snap every 10 seconds. Between snaps, max drift is ~70ms
+      // (under 2 frames at 24fps, below lip-sync perception threshold).
+      const wallNow = performance.now();
+      if (!this.ptsCalibrated || wallNow - this.lastCalibrationWall > 10_000) {
         this.ptsCalibrationUs = headTs - rawAudioNowUs;
         this.ptsCalibrated = true;
+        this.lastCalibrationWall = wallNow;
       }
 
       const audioNowUs = rawAudioNowUs + this.ptsCalibrationUs;
@@ -246,20 +250,6 @@ export class VideoRenderer {
       }
 
       this.ticksPainted++;
-
-      // Update calibration from the frame we're about to paint.
-      // EMA smoothing (alpha=0.05) tracks the ~0.1% rate drift between
-      // video PTS and audio clock without jumping on single-frame noise.
-      // On first paint (or after seek), snap to the measured offset.
-      const paintedFrame = this.queue[0];
-      const paintedPts = paintedFrame?.timestamp ?? 0;
-      const measuredOffset = paintedPts - rawAudioNowUs;
-      if (!this.ptsCalibrated) {
-        this.ptsCalibrationUs = measuredOffset;
-        this.ptsCalibrated = true;
-      } else {
-        this.ptsCalibrationUs = 0.95 * this.ptsCalibrationUs + 0.05 * measuredOffset;
-      }
 
       if (isDebug()) {
         const now = performance.now();
