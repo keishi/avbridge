@@ -9,8 +9,12 @@
  * through. Consumers interact with `<avbridge-player>` exclusively.
  */
 
-import "../element.js";
-import type { AvbridgeVideoElement } from "./avbridge-video.js";
+// Import the class concretely and register — side-effect-only imports
+// are tree-shaken by Rollup in production builds.
+import { AvbridgeVideoElement } from "./avbridge-video.js";
+if (typeof customElements !== "undefined" && !customElements.get("avbridge-video")) {
+  customElements.define("avbridge-video", AvbridgeVideoElement);
+}
 import { PLAYER_STYLES } from "./player-styles.js";
 import {
   ICON_PLAY, ICON_PAUSE,
