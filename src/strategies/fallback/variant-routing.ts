@@ -19,25 +19,19 @@ import type { LibavVariant } from "./libav-loader.js";
 
 const LEGACY_CONTAINERS = new Set(["avi", "asf", "flv"]);
 
-const LEGACY_VIDEO_CODECS = new Set<VideoCodec>([
-  "wmv3",
-  "vc1",
-  "mpeg4", // MPEG-4 Part 2 / DivX / Xvid
-  "rv40",
-  "mpeg2",
-  "mpeg1",
-  "theora",
-]);
-
-const LEGACY_AUDIO_CODECS = new Set<AudioCodec>(["wmav2", "wmapro", "ac3", "eac3"]);
+/** Codecs the webcodecs variant can handle (native browser codecs only).
+ * Anything not in these sets needs the custom avbridge variant. */
+const WEBCODECS_AUDIO = new Set<AudioCodec>(["aac", "mp3", "opus", "vorbis", "flac"]);
+const WEBCODECS_VIDEO = new Set<VideoCodec>(["h264", "h265", "vp8", "vp9", "av1"]);
 
 export function pickLibavVariant(ctx: MediaContext): LibavVariant {
   if (LEGACY_CONTAINERS.has(ctx.container)) return "avbridge";
   for (const v of ctx.videoTracks) {
-    if (LEGACY_VIDEO_CODECS.has(v.codec)) return "avbridge";
+    // Any codec the webcodecs variant can't handle → need avbridge
+    if (!WEBCODECS_VIDEO.has(v.codec)) return "avbridge";
   }
   for (const a of ctx.audioTracks) {
-    if (LEGACY_AUDIO_CODECS.has(a.codec)) return "avbridge";
+    if (!WEBCODECS_AUDIO.has(a.codec)) return "avbridge";
   }
   return "webcodecs";
 }
