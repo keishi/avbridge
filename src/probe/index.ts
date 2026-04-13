@@ -1,4 +1,4 @@
-import type { ContainerKind, MediaContext, MediaInput } from "../types.js";
+import type { ContainerKind, MediaContext, MediaInput, TransportConfig } from "../types.js";
 import { normalizeSource, sniffNormalizedSource } from "../util/source.js";
 import { probeWithMediabunny } from "./mediabunny.js";
 
@@ -32,8 +32,11 @@ const MEDIABUNNY_CONTAINERS = new Set<ContainerKind>([
  *    mediabunny can't read those containers at all, so there's no fast path
  *    to try.
  */
-export async function probe(source: MediaInput): Promise<MediaContext> {
-  const normalized = await normalizeSource(source);
+export async function probe(
+  source: MediaInput,
+  transport?: TransportConfig,
+): Promise<MediaContext> {
+  const normalized = await normalizeSource(source, transport);
   const sniffed = await sniffNormalizedSource(normalized);
 
   if (MEDIABUNNY_CONTAINERS.has(sniffed)) {

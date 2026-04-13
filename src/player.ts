@@ -15,6 +15,7 @@ import type {
   PlayerEventMap,
   PlayerEventName,
   StrategyName,
+  TransportConfig,
   Listener,
 } from "./types.js";
 
@@ -46,13 +47,23 @@ export class UnifiedPlayer {
   // Revoked at destroy() so repeated source swaps don't leak.
   private subtitleResources = new SubtitleResourceBag();
 
+  // Transport config extracted from CreatePlayerOptions. Threaded to probe,
+  // subtitle fetches, and strategy session creators. Not stored on MediaContext
+  // because it's runtime config, not media analysis.
+  private readonly transport: TransportConfig | undefined;
+
   /**
    * @internal Use {@link createPlayer} or {@link UnifiedPlayer.create} instead.
    */
   private constructor(
     private readonly options: CreatePlayerOptions,
     private readonly registry: PluginRegistry,
-  ) {}
+  ) {
+    const { requestInit, fetchFn } = options;
+    if (requestInit || fetchFn) {
+      this.transport = { requestInit, fetchFn };
+    }
+  }
 
   static async create(options: CreatePlayerOptions): Promise<UnifiedPlayer> {
     const registry = new PluginRegistry();
@@ -74,7 +85,7 @@ export class UnifiedPlayer {
     const bootstrapStart = performance.now();
     try {
       dbg.info("bootstrap", "start");
-      const ctx = await dbg.timed("probe", "probe", 3000, () => probe(this.options.source));
+      const ctx = await dbg.timed("probe", "probe", 3000, () => probe(this.options.source, this.transport));
       dbg.info("probe",
         `container=${ctx.container} video=${ctx.videoTracks[0]?.codec ?? "-"} ` +
         `audio=${ctx.audioTracks[0]?.codec ?? "-"} probedBy=${ctx.probedBy}`,
@@ -139,6 +150,7 @@ export class UnifiedPlayer {
             // eslint-disable-next-line no-console
             console.warn(`[avbridge] subtitle ${track.id} failed: ${err.message}`);
           },
+          this.transport,
         );
       }
 
@@ -181,7 +193,7 @@ export class UnifiedPlayer {
     }
 
     try {
-      this.session = await plugin.execute(this.mediaContext!, this.options.target);
+      this.session = await plugin.execute(this.mediaContext!, this.options.target, this.transport);
     } catch (err) {
       // Try the fallback chain
       const chain = this.classification?.fallbackChain;
@@ -275,7 +287,7 @@ export class UnifiedPlayer {
       }
 
       try {
-        this.session = await plugin.execute(this.mediaContext!, this.options.target);
+        this.session = await plugin.execute(this.mediaContext!, this.options.target, this.transport);
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         errors.push(`${nextStrategy}: ${msg}`);
@@ -398,7 +410,7 @@ export class UnifiedPlayer {
     const plugin = this.registry.findFor(this.mediaContext!, strategy);
     if (!plugin) throw new Error(`no plugin available for strategy "${strategy}"`);
 
-    this.session = await plugin.execute(this.mediaContext!, this.options.target);
+    this.session = await plugin.execute(this.mediaContext!, this.options.target, this.transport);
 
     this.emitter.emitSticky("strategy", {
       strategy,

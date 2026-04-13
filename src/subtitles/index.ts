@@ -1,4 +1,5 @@
-import type { SubtitleTrackInfo } from "../types.js";
+import type { SubtitleTrackInfo, TransportConfig } from "../types.js";
+import { fetchWith } from "../util/transport.js";
 import { srtToVtt } from "./srt.js";
 import { isVtt } from "./vtt.js";
 
@@ -98,7 +99,10 @@ export async function attachSubtitleTracks(
   tracks: SubtitleTrackInfo[],
   bag?: SubtitleResourceBag,
   onError?: (err: Error, track: SubtitleTrackInfo) => void,
+  transport?: TransportConfig,
 ): Promise<void> {
+  const doFetch = fetchWith(transport);
+
   // Clear existing dynamically-attached tracks.
   for (const t of Array.from(video.querySelectorAll("track[data-avbridge]"))) {
     t.remove();
@@ -109,14 +113,14 @@ export async function attachSubtitleTracks(
     try {
       let url = t.sidecarUrl;
       if (t.format === "srt") {
-        const res = await fetch(t.sidecarUrl);
+        const res = await doFetch(t.sidecarUrl, transport?.requestInit);
         const text = await res.text();
         const vtt = srtToVtt(text);
         const blob = new Blob([vtt], { type: "text/vtt" });
         url = bag ? bag.createObjectURL(blob) : URL.createObjectURL(blob);
       } else if (t.format === "vtt") {
         // Validate quickly so a malformed file fails loudly here.
-        const res = await fetch(t.sidecarUrl);
+        const res = await doFetch(t.sidecarUrl, transport?.requestInit);
         const text = await res.text();
         if (!isVtt(text)) {
           // eslint-disable-next-line no-console

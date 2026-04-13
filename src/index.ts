@@ -34,6 +34,8 @@ export type {
   OutputVideoCodec,
   OutputAudioCodec,
   HardwareAccelerationHint,
+  FetchFn,
+  TransportConfig,
 } from "./types.js";
 
 export { classify } from "./classify/index.js";

@@ -20,13 +20,13 @@ const remuxPlugin: Plugin = {
 const hybridPlugin: Plugin = {
   name: "hybrid",
   canHandle: () => typeof VideoDecoder !== "undefined",
-  execute: (ctx, video) => createHybridSession(ctx, video),
+  execute: (ctx, video, transport) => createHybridSession(ctx, video, transport),
 };
 
 const fallbackPlugin: Plugin = {
   name: "fallback",
   canHandle: () => true,
-  execute: (ctx, video) => createFallbackSession(ctx, video),
+  execute: (ctx, video, transport) => createFallbackSession(ctx, video, transport),
 };
 
 export function registerBuiltins(registry: PluginRegistry): void {

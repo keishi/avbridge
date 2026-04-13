@@ -18,6 +18,7 @@ import { loadLibav, type LibavVariant } from "../fallback/libav-loader.js";
 import { VideoRenderer } from "../fallback/video-renderer.js";
 import { AudioOutput } from "../fallback/audio-output.js";
 import type { MediaContext } from "../../types.js";
+import { dbg } from "../../util/debug.js";
 import { pickLibavVariant } from "../fallback/variant-routing.js";
 
 export interface HybridDecoderHandles {
@@ -34,6 +35,7 @@ export interface StartHybridDecoderOptions {
   context: MediaContext;
   renderer: VideoRenderer;
   audio: AudioOutput;
+  transport?: import("../../types.js").TransportConfig;
 }
 
 export async function startHybridDecoder(opts: StartHybridDecoderOptions): Promise<HybridDecoderHandles> {
@@ -45,7 +47,7 @@ export async function startHybridDecoder(opts: StartHybridDecoderOptions): Promi
   // libav demuxes via Range requests. For Blob sources, it falls back to
   // mkreadaheadfile (in-memory). The returned handle owns cleanup.
   const { prepareLibavInput } = await import("../../util/libav-http-reader.js");
-  const inputHandle = await prepareLibavInput(libav as unknown as Parameters<typeof prepareLibavInput>[0], opts.filename, opts.source);
+  const inputHandle = await prepareLibavInput(libav as unknown as Parameters<typeof prepareLibavInput>[0], opts.filename, opts.source, opts.transport);
 
   const readPkt = await libav.av_packet_alloc();
   const [fmt_ctx, streams] = await libav.ff_init_demuxer_file(opts.filename);
@@ -134,6 +136,58 @@ export async function startHybridDecoder(opts: StartHybridDecoderOptions): Promi
     throw new Error("hybrid decoder: could not initialize any decoders");
   }
 
+  // ── Bitstream filter for MPEG-4 Part 2 packed B-frames ───────────────
+  let bsfCtx: number | null = null;
+  let bsfPkt: number | null = null;
+  if (videoStream && opts.context.videoTracks[0]?.codec === "mpeg4") {
+    try {
+      bsfCtx = await libav.av_bsf_list_parse_str_js("mpeg4_unpack_bframes");
+      if (bsfCtx != null && bsfCtx >= 0) {
+        const parIn = await libav.AVBSFContext_par_in(bsfCtx);
+        await libav.avcodec_parameters_copy(parIn, videoStream.codecpar);
+        await libav.av_bsf_init(bsfCtx);
+        bsfPkt = await libav.av_packet_alloc();
+        dbg.info("bsf", "mpeg4_unpack_bframes BSF active (hybrid)");
+      } else {
+        // eslint-disable-next-line no-console
+        console.warn("[avbridge] mpeg4_unpack_bframes BSF not available in hybrid decoder");
+        bsfCtx = null;
+      }
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn("[avbridge] hybrid: failed to init BSF:", (err as Error).message);
+      bsfCtx = null;
+      bsfPkt = null;
+    }
+  }
+
+  async function applyBSF(packets: LibavPacket[]): Promise<LibavPacket[]> {
+    if (!bsfCtx || !bsfPkt) return packets;
+    const out: LibavPacket[] = [];
+    for (const pkt of packets) {
+      await libav.ff_copyin_packet(bsfPkt, pkt);
+      const sendErr = await libav.av_bsf_send_packet(bsfCtx, bsfPkt);
+      if (sendErr < 0) { out.push(pkt); continue; }
+      while (true) {
+        const recvErr = await libav.av_bsf_receive_packet(bsfCtx, bsfPkt);
+        if (recvErr < 0) break;
+        out.push(await libav.ff_copyout_packet(bsfPkt));
+      }
+    }
+    return out;
+  }
+
+  async function flushBSF(): Promise<void> {
+    if (!bsfCtx || !bsfPkt) return;
+    try {
+      await libav.av_bsf_send_packet(bsfCtx, 0);
+      while (true) {
+        const err = await libav.av_bsf_receive_packet(bsfCtx, bsfPkt);
+        if (err < 0) break;
+      }
+    } catch { /* ignore */ }
+  }
+
   // ── Mutable state ─────────────────────────────────────────────────────
   let destroyed = false;
   let pumpToken = 0;
@@ -171,9 +225,10 @@ export async function startHybridDecoder(opts: StartHybridDecoderOptions): Promi
       const videoPackets = videoStream ? packets[videoStream.index] : undefined;
       const audioPackets = audioStream ? packets[audioStream.index] : undefined;
 
-      // Feed video packets to WebCodecs VideoDecoder
+      // Feed video packets to WebCodecs VideoDecoder (after BSF if applicable)
       if (videoDecoder && videoPackets && videoPackets.length > 0) {
-        for (const pkt of videoPackets) {
+        const processed = await applyBSF(videoPackets);
+        for (const pkt of processed) {
           if (myToken !== pumpToken || destroyed) return;
           sanitizePacketTimestamp(pkt, () => {
             const ts = syntheticVideoUs;
@@ -283,6 +338,8 @@ export async function startHybridDecoder(opts: StartHybridDecoderOptions): Promi
       destroyed = true;
       pumpToken++;
       try { await pumpRunning; } catch { /* ignore */ }
+      try { if (bsfCtx) await libav.av_bsf_free(bsfCtx); } catch { /* ignore */ }
+      try { if (bsfPkt) await libav.av_packet_free?.(bsfPkt); } catch { /* ignore */ }
       try { if (videoDecoder && videoDecoder.state !== "closed") videoDecoder.close(); } catch { /* ignore */ }
       try { if (audioDec) await libav.ff_free_decoder?.(audioDec.c, audioDec.pkt, audioDec.frame); } catch { /* ignore */ }
       try { await libav.av_packet_free?.(readPkt); } catch { /* ignore */ }
@@ -324,6 +381,7 @@ export async function startHybridDecoder(opts: StartHybridDecoderOptions): Promi
       try {
         if (audioDec) await libav.avcodec_flush_buffers?.(audioDec.c);
       } catch { /* ignore */ }
+      await flushBSF();
 
       syntheticVideoUs = Math.round(timeSec * 1_000_000);
       syntheticAudioUs = Math.round(timeSec * 1_000_000);
@@ -340,6 +398,7 @@ export async function startHybridDecoder(opts: StartHybridDecoderOptions): Promi
         videoFramesDecoded,
         videoChunksFed,
         audioFramesDecoded,
+        bsfApplied: bsfCtx ? ["mpeg4_unpack_bframes"] : [],
         videoDecodeQueueSize: videoDecoder?.decodeQueueSize ?? 0,
         // Confirmed transport info — see fallback decoder for the pattern.
         _transport: inputHandle.transport === "http-range" ? "http-range" : "memory",
@@ -636,6 +695,17 @@ interface LibavRuntime {
   avcodec_flush_buffers?(c: number): Promise<void>;
   avformat_close_input_js(ctx: number): Promise<void>;
   f64toi64?(val: number): [number, number];
+
+  // BSF methods
+  av_bsf_list_parse_str_js(str: string): Promise<number>;
+  AVBSFContext_par_in(ctx: number): Promise<number>;
+  avcodec_parameters_copy(dst: number, src: number): Promise<number>;
+  av_bsf_init(ctx: number): Promise<number>;
+  av_bsf_send_packet(ctx: number, pkt: number): Promise<number>;
+  av_bsf_receive_packet(ctx: number, pkt: number): Promise<number>;
+  av_bsf_free(ctx: number): Promise<void>;
+  ff_copyin_packet(pktPtr: number, packet: LibavPacket): Promise<void>;
+  ff_copyout_packet(pkt: number): Promise<LibavPacket>;
 }
 
 interface BridgeModule {

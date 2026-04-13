@@ -1,4 +1,5 @@
-import type { ContainerKind, MediaInput } from "../types.js";
+import type { ContainerKind, MediaInput, TransportConfig } from "../types.js";
+import { mergeFetchInit, fetchWith } from "./transport.js";
 
 /**
  * Bytes needed by the sniffer to identify every container we recognize.
@@ -59,7 +60,10 @@ export function isInMemorySource(source: NormalizedSource): source is Extract<No
  *
  * For non-URL inputs, the bytes are already in memory and we just wrap them.
  */
-export async function normalizeSource(source: MediaInput): Promise<NormalizedSource> {
+export async function normalizeSource(
+  source: MediaInput,
+  transport?: TransportConfig,
+): Promise<NormalizedSource> {
   if (source instanceof File) {
     return {
       kind: "blob",
@@ -82,7 +86,7 @@ export async function normalizeSource(source: MediaInput): Promise<NormalizedSou
   }
   if (typeof source === "string" || source instanceof URL) {
     const url = source instanceof URL ? source.toString() : source;
-    return await fetchUrlForSniff(url, source);
+    return await fetchUrlForSniff(url, source, transport);
   }
   throw new TypeError("unsupported source type");
 }
@@ -93,15 +97,20 @@ export async function normalizeSource(source: MediaInput): Promise<NormalizedSou
  * we only read the first 32 KB and abort the rest of the response so we
  * don't accidentally buffer a large file.
  */
-async function fetchUrlForSniff(url: string, originalSource: MediaInput): Promise<NormalizedSource> {
+async function fetchUrlForSniff(
+  url: string,
+  originalSource: MediaInput,
+  transport?: TransportConfig,
+): Promise<NormalizedSource> {
   const name = url.split("/").pop()?.split("?")[0] ?? undefined;
+  const doFetch = fetchWith(transport);
 
   // First attempt: Range request for the sniff window.
   let res: Response;
   try {
-    res = await fetch(url, {
+    res = await doFetch(url, mergeFetchInit(transport?.requestInit, {
       headers: { Range: `bytes=0-${URL_SNIFF_RANGE_BYTES - 1}` },
-    });
+    })!);
   } catch (err) {
     throw new Error(`failed to fetch source ${url}: ${(err as Error).message}`);
   }

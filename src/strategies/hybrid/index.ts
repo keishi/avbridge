@@ -1,4 +1,4 @@
-import type { MediaContext, PlaybackSession } from "../../types.js";
+import type { MediaContext, PlaybackSession, TransportConfig } from "../../types.js";
 import { VideoRenderer } from "../fallback/video-renderer.js";
 import { AudioOutput } from "../fallback/audio-output.js";
 import { startHybridDecoder, type HybridDecoderHandles } from "./decoder.js";
@@ -20,6 +20,7 @@ const READY_TIMEOUT_SECONDS = 10;
 export async function createHybridSession(
   ctx: MediaContext,
   target: HTMLVideoElement,
+  transport?: TransportConfig,
 ): Promise<PlaybackSession> {
   // Normalize the source so URL inputs go through the libav HTTP block
   // reader instead of being buffered into memory.
@@ -38,6 +39,7 @@ export async function createHybridSession(
       context: ctx,
       renderer,
       audio,
+      transport,
     });
   } catch (err) {
     audio.destroy();

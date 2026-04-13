@@ -219,7 +219,7 @@ export interface Plugin {
   name: string;
   canHandle(context: MediaContext): boolean;
   /** Returns a session if it claims the context, otherwise throws. */
-  execute(context: MediaContext, target: HTMLVideoElement): Promise<PlaybackSession>;
+  execute(context: MediaContext, target: HTMLVideoElement, transport?: TransportConfig): Promise<PlaybackSession>;
 }
 
 /** Player creation options. */
@@ -256,6 +256,27 @@ export interface CreatePlayerOptions {
    * strategy in the fallback chain on failure or stall.
    */
   autoEscalate?: boolean;
+  /**
+   * Extra {@link RequestInit} merged into every HTTP request the player
+   * makes (probe Range requests, subtitle fetches, libav HTTP reader).
+   * Headers are merged, not overwritten — so you can add `Authorization`
+   * without losing the player's `Range` header.
+   */
+  requestInit?: RequestInit;
+  /**
+   * Custom fetch implementation. Defaults to `globalThis.fetch`. Useful
+   * for interceptors, logging, or environments without a global fetch.
+   */
+  fetchFn?: FetchFn;
+}
+
+/** Signature-compatible with `globalThis.fetch`. */
+export type FetchFn = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+
+/** Internal transport config bundle. Not part of the public API. */
+export interface TransportConfig {
+  requestInit?: RequestInit;
+  fetchFn?: FetchFn;
 }
 
 /** Events emitted by {@link UnifiedPlayer}. Strongly typed. */

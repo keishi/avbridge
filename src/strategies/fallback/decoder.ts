@@ -28,6 +28,7 @@ import { VideoRenderer } from "./video-renderer.js";
 import { AudioOutput } from "./audio-output.js";
 import type { MediaContext } from "../../types.js";
 import { pickLibavVariant } from "./variant-routing.js";
+import { dbg } from "../../util/debug.js";
 
 export interface DecoderHandles {
   destroy(): Promise<void>;
@@ -43,6 +44,7 @@ export interface StartDecoderOptions {
   context: MediaContext;
   renderer: VideoRenderer;
   audio: AudioOutput;
+  transport?: import("../../types.js").TransportConfig;
 }
 
 export async function startDecoder(opts: StartDecoderOptions): Promise<DecoderHandles> {
@@ -54,7 +56,7 @@ export async function startDecoder(opts: StartDecoderOptions): Promise<DecoderHa
   // libav demuxes via Range requests. For Blob sources, it falls back to
   // mkreadaheadfile (in-memory). The returned handle owns cleanup.
   const { prepareLibavInput } = await import("../../util/libav-http-reader.js");
-  const inputHandle = await prepareLibavInput(libav as unknown as Parameters<typeof prepareLibavInput>[0], opts.filename, opts.source);
+  const inputHandle = await prepareLibavInput(libav as unknown as Parameters<typeof prepareLibavInput>[0], opts.filename, opts.source, opts.transport);
 
   // Pre-allocate one AVPacket for ff_read_frame_multi to reuse.
   const readPkt = await libav.av_packet_alloc();
@@ -124,6 +126,67 @@ export async function startDecoder(opts: StartDecoderOptions): Promise<DecoderHa
     throw new Error(
       `fallback decoder: could not initialize any libav decoders (${codecs}).${hint}`,
     );
+  }
+
+  // ── Bitstream filter for MPEG-4 Part 2 packed B-frames ───────────────
+  // Applied unconditionally for mpeg4 video — the BSF is a no-op when
+  // the stream doesn't actually have packed B-frames, so false positives
+  // are harmless. Without it, DivX files with packed B-frames produce
+  // garbled frame ordering.
+  let bsfCtx: number | null = null;
+  let bsfPkt: number | null = null;
+  if (videoStream && opts.context.videoTracks[0]?.codec === "mpeg4") {
+    try {
+      bsfCtx = await libav.av_bsf_list_parse_str_js("mpeg4_unpack_bframes");
+      if (bsfCtx != null && bsfCtx >= 0) {
+        const parIn = await libav.AVBSFContext_par_in(bsfCtx);
+        await libav.avcodec_parameters_copy(parIn, videoStream.codecpar);
+        await libav.av_bsf_init(bsfCtx);
+        bsfPkt = await libav.av_packet_alloc();
+        dbg.info("bsf", "mpeg4_unpack_bframes BSF active");
+      } else {
+        // eslint-disable-next-line no-console
+        console.warn("[avbridge] mpeg4_unpack_bframes BSF not available — decoding without it");
+        bsfCtx = null;
+      }
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn("[avbridge] failed to init mpeg4_unpack_bframes BSF:", (err as Error).message);
+      bsfCtx = null;
+      bsfPkt = null;
+    }
+  }
+
+  /** Run video packets through the BSF. Returns original packets if no BSF active. */
+  async function applyBSF(packets: LibavPacket[]): Promise<LibavPacket[]> {
+    if (!bsfCtx || !bsfPkt) return packets;
+    const out: LibavPacket[] = [];
+    for (const pkt of packets) {
+      await libav.ff_copyin_packet(bsfPkt, pkt);
+      const sendErr = await libav.av_bsf_send_packet(bsfCtx, bsfPkt);
+      if (sendErr < 0) {
+        out.push(pkt); // BSF rejected — pass through original
+        continue;
+      }
+      while (true) {
+        const recvErr = await libav.av_bsf_receive_packet(bsfCtx, bsfPkt);
+        if (recvErr < 0) break; // EAGAIN or EOF
+        out.push(await libav.ff_copyout_packet(bsfPkt));
+      }
+    }
+    return out;
+  }
+
+  /** Flush the BSF (on seek or EOF) to drain any internally buffered packets. */
+  async function flushBSF(): Promise<void> {
+    if (!bsfCtx || !bsfPkt) return;
+    try {
+      await libav.av_bsf_send_packet(bsfCtx, 0);
+      while (true) {
+        const err = await libav.av_bsf_receive_packet(bsfCtx, bsfPkt);
+        if (err < 0) break;
+      }
+    } catch { /* ignore flush errors */ }
   }
 
   // ── Mutable state shared across pump loops ───────────────────────────
@@ -202,7 +265,8 @@ export async function startDecoder(opts: StartDecoderOptions): Promise<DecoderHa
       }
       if (myToken !== pumpToken || destroyed) return;
       if (videoDec && videoPackets && videoPackets.length > 0) {
-        await decodeVideoBatch(videoPackets, myToken);
+        const processed = await applyBSF(videoPackets);
+        await decodeVideoBatch(processed, myToken);
       }
 
       packetsRead += (videoPackets?.length ?? 0) + (audioPackets?.length ?? 0);
@@ -382,6 +446,8 @@ export async function startDecoder(opts: StartDecoderOptions): Promise<DecoderHa
       destroyed = true;
       pumpToken++;
       try { await pumpRunning; } catch { /* ignore */ }
+      try { if (bsfCtx) await libav.av_bsf_free(bsfCtx); } catch { /* ignore */ }
+      try { if (bsfPkt) await libav.av_packet_free?.(bsfPkt); } catch { /* ignore */ }
       try { if (videoDec) await libav.ff_free_decoder?.(videoDec.c, videoDec.pkt, videoDec.frame); } catch { /* ignore */ }
       try { if (audioDec) await libav.ff_free_decoder?.(audioDec.c, audioDec.pkt, audioDec.frame); } catch { /* ignore */ }
       try { await libav.av_packet_free?.(readPkt); } catch { /* ignore */ }
@@ -435,6 +501,7 @@ export async function startDecoder(opts: StartDecoderOptions): Promise<DecoderHa
       try {
         if (audioDec) await libav.avcodec_flush_buffers?.(audioDec.c);
       } catch { /* ignore */ }
+      await flushBSF();
 
       // Reset synthetic timestamp counters to the seek target so newly
       // decoded frames start at the right media time.
@@ -456,6 +523,7 @@ export async function startDecoder(opts: StartDecoderOptions): Promise<DecoderHa
         packetsRead,
         videoFramesDecoded,
         audioFramesDecoded,
+        bsfApplied: bsfCtx ? ["mpeg4_unpack_bframes"] : [],
         // Confirmed transport info: once prepareLibavInput returns
         // successfully, we *know* whether the source is http-range (probe
         // succeeded and returned 206) or in-memory blob. Diagnostics hoists
@@ -740,6 +808,19 @@ interface LibavRuntime {
   avformat_close_input_js(ctx: number): Promise<void>;
   /** Sync helper exposed by libav.js: split a JS number into (lo, hi) int64. */
   f64toi64?(val: number): [number, number];
+
+  // BSF (bitstream filter) methods — used for mpeg4_unpack_bframes
+  av_bsf_list_parse_str_js(str: string): Promise<number>;
+  AVBSFContext_par_in(ctx: number): Promise<number>;
+  avcodec_parameters_copy(dst: number, src: number): Promise<number>;
+  av_bsf_init(ctx: number): Promise<number>;
+  av_bsf_send_packet(ctx: number, pkt: number): Promise<number>;
+  av_bsf_receive_packet(ctx: number, pkt: number): Promise<number>;
+  av_bsf_free(ctx: number): Promise<void>;
+
+  // Packet copy helpers — bridge JS packet objects to/from C-level pointers
+  ff_copyin_packet(pktPtr: number, packet: LibavPacket): Promise<void>;
+  ff_copyout_packet(pkt: number): Promise<LibavPacket>;
 }
 
 interface BridgeModule {

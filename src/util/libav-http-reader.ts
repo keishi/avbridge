@@ -102,9 +102,13 @@ export async function prepareLibavInput(
   libav: LibavLikeWithBlob,
   filename: string,
   source: import("./source.js").NormalizedSource,
+  transport?: import("../types.js").TransportConfig,
 ): Promise<LibavInputHandle> {
   if (source.kind === "url") {
-    const handle = await attachLibavHttpReader(libav, filename, source.url);
+    const handle = await attachLibavHttpReader(libav, filename, source.url, {
+      requestInit: transport?.requestInit,
+      fetchFn: transport?.fetchFn,
+    });
     return {
       filename,
       transport: "http-range",
