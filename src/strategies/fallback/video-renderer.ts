@@ -167,27 +167,44 @@ export class VideoRenderer {
 
     if (hasPts) {
       // PTS mode: find the latest frame that should be displayed now.
-      // Drop any frames that are too old (video behind audio).
+      //
+      // When the main thread blocks (DTS decode), rAF doesn't fire for
+      // 10-50ms. By the time we run, the audio clock has advanced and
+      // several frames may be "past." Dropping them all causes stutter.
+      //
+      // Instead: only drop frames that are MORE than one frame-duration
+      // behind the audio clock. Frames within one frame-duration are
+      // considered "on time" — the main-thread jank isn't the renderer's
+      // fault and dropping doesn't help the user.
+      const frameDurationUs = this.paintIntervalMs * 1000;
+      const deadlineUs = audioNowUs + frameDurationUs; // one frame of slack
+
       let bestIdx = -1;
       for (let i = 0; i < this.queue.length; i++) {
         const ts = this.queue[i].timestamp ?? 0;
-        if (ts <= audioNowUs + this.paintIntervalMs * 500) {
-          // This frame's PTS has arrived or is within half a frame of now
+        if (ts <= deadlineUs) {
           bestIdx = i;
         } else {
-          break; // queue is in PTS order — future frames are later
+          break;
         }
       }
 
-      if (bestIdx < 0) {
-        // All frames are in the future — wait (video ahead of audio)
-        return;
-      }
+      if (bestIdx < 0) return; // all frames in the future — wait
 
-      // Drop any frames before bestIdx (they're late / stale)
-      for (let i = 0; i < bestIdx; i++) {
-        this.queue.shift()?.close();
-        this.framesDroppedLate++;
+      // Only drop frames that are more than 2 frame-durations behind.
+      // This tolerates main-thread jank without unnecessary drops.
+      const dropThresholdUs = audioNowUs - frameDurationUs * 2;
+      let dropped = 0;
+      while (bestIdx > 0) {
+        const ts = this.queue[0].timestamp ?? 0;
+        if (ts < dropThresholdUs) {
+          this.queue.shift()?.close();
+          this.framesDroppedLate++;
+          bestIdx--;
+          dropped++;
+        } else {
+          break;
+        }
       }
 
       const frame = this.queue.shift()!;
@@ -198,7 +215,6 @@ export class VideoRenderer {
     }
 
     // Wall-clock fallback: used when timestamps are unreliable (all zero).
-    // Paint one frame every paintIntervalMs of wall time.
     const wallNow = performance.now();
     if (wallNow - this.lastPaintWall < this.paintIntervalMs - 2) return;
 
