@@ -225,6 +225,23 @@ export async function startHybridDecoder(opts: StartHybridDecoderOptions): Promi
       const videoPackets = videoStream ? packets[videoStream.index] : undefined;
       const audioPackets = audioStream ? packets[audioStream.index] : undefined;
 
+      // Decode audio BEFORE video. Same rationale as fallback decoder
+      // (POSTMORTEMS.md entry 1, fix #2): audio decode via libav's
+      // ff_decode_multi is a blocking WASM call that prevents rAF from
+      // firing. For heavy codecs like DTS, a single batch can take
+      // 10-50 ms. Processing audio first ensures the audio scheduler is
+      // fed before video decode starts, reducing perceived stutter.
+      if (audioDec && audioPackets && audioPackets.length > 0) {
+        await decodeAudioBatch(audioPackets, myToken);
+      }
+      if (myToken !== pumpToken || destroyed) return;
+
+      // Yield to the event loop so the video renderer's rAF callback
+      // can fire between the audio decode (blocking) and the video feed
+      // (async). Without this, the renderer starves during DTS decode.
+      await new Promise((r) => setTimeout(r, 0));
+      if (myToken !== pumpToken || destroyed) return;
+
       // Feed video packets to WebCodecs VideoDecoder (after BSF if applicable)
       if (videoDecoder && videoPackets && videoPackets.length > 0) {
         const processed = await applyBSF(videoPackets);
@@ -247,11 +264,6 @@ export async function startHybridDecoder(opts: StartHybridDecoderOptions): Promi
             }
           }
         }
-      }
-
-      // Decode audio with libav software decoder
-      if (audioDec && audioPackets && audioPackets.length > 0) {
-        await decodeAudioBatch(audioPackets, myToken);
       }
 
       packetsRead += (videoPackets?.length ?? 0) + (audioPackets?.length ?? 0);
@@ -285,20 +297,49 @@ export async function startHybridDecoder(opts: StartHybridDecoderOptions): Promi
 
   async function decodeAudioBatch(pkts: LibavPacket[], myToken: number, flush = false) {
     if (!audioDec || destroyed || myToken !== pumpToken) return;
-    let frames: LibavFrame[];
-    try {
-      frames = await libav.ff_decode_multi(
-        audioDec.c,
-        audioDec.pkt,
-        audioDec.frame,
-        pkts,
-        flush ? { fin: true, ignoreErrors: true } : { ignoreErrors: true },
-      );
-    } catch (err) {
-      console.error("[avbridge] hybrid audio decode failed:", err);
-      return;
+
+    // For heavy codecs (DTS, AC3), decode in small sub-batches and yield
+    // between them so the event loop can run rAF for video painting.
+    // Each ff_decode_multi call is a blocking WASM invocation.
+    const AUDIO_SUB_BATCH = 4; // packets per sub-batch
+    let allFrames: LibavFrame[] = [];
+
+    for (let i = 0; i < pkts.length; i += AUDIO_SUB_BATCH) {
+      if (myToken !== pumpToken || destroyed) return;
+      const slice = pkts.slice(i, i + AUDIO_SUB_BATCH);
+      const isLast = i + AUDIO_SUB_BATCH >= pkts.length;
+      try {
+        const frames = await libav.ff_decode_multi(
+          audioDec.c,
+          audioDec.pkt,
+          audioDec.frame,
+          slice,
+          isLast && flush ? { fin: true, ignoreErrors: true } : { ignoreErrors: true },
+        );
+        allFrames = allFrames.concat(frames);
+      } catch (err) {
+        console.error("[avbridge] hybrid audio decode failed:", err);
+        return;
+      }
+      // Yield between sub-batches so rAF can fire
+      if (!isLast) await new Promise((r) => setTimeout(r, 0));
     }
+
+    // Handle flush-only call (empty pkts array)
+    if (pkts.length === 0 && flush) {
+      try {
+        allFrames = await libav.ff_decode_multi(
+          audioDec.c, audioDec.pkt, audioDec.frame, [],
+          { fin: true, ignoreErrors: true },
+        );
+      } catch (err) {
+        console.error("[avbridge] hybrid audio flush failed:", err);
+        return;
+      }
+    }
+
     if (myToken !== pumpToken || destroyed) return;
+    const frames = allFrames;
 
     for (const f of frames) {
       if (myToken !== pumpToken || destroyed) return;
