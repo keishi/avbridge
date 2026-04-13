@@ -18,6 +18,7 @@ import type {
   TransportConfig,
   Listener,
 } from "./types.js";
+import { AvbridgeError, ERR_PLAYER_NOT_READY, ERR_ALL_STRATEGIES_EXHAUSTED } from "./errors.js";
 
 export class UnifiedPlayer {
   private emitter = new TypedEmitter<PlayerEventMap>();
@@ -314,8 +315,10 @@ export class UnifiedPlayer {
     }
 
     // Chain exhausted with no working strategy.
-    this.emitter.emit("error", new Error(
-      `all fallback strategies failed: ${errors.join("; ")}`,
+    this.emitter.emit("error", new AvbridgeError(
+      ERR_ALL_STRATEGIES_EXHAUSTED,
+      `All playback strategies failed: ${errors.join("; ")}`,
+      "This file may require a codec or container that isn't available in this browser. Try the fallback strategy or check browser codec support.",
     ));
   }
 
@@ -378,7 +381,7 @@ export class UnifiedPlayer {
 
   /** Manually switch to a different playback strategy. Preserves current position and play/pause state. Concurrent calls are serialized. */
   async setStrategy(strategy: StrategyName, reason?: string): Promise<void> {
-    if (!this.mediaContext) throw new Error("player not ready");
+    if (!this.mediaContext) throw new AvbridgeError(ERR_PLAYER_NOT_READY, "Player not ready — wait for the 'ready' event before calling playback methods.", "Await the 'ready' event or check player.readyState before calling play/pause/seek.");
     if (this.session?.strategy === strategy) return;
 
     this.switchingPromise = this.switchingPromise.then(() =>
@@ -453,7 +456,7 @@ export class UnifiedPlayer {
 
   /** Begin or resume playback. Throws if the player is not ready. */
   async play(): Promise<void> {
-    if (!this.session) throw new Error("player not ready");
+    if (!this.session) throw new AvbridgeError(ERR_PLAYER_NOT_READY, "Player not ready — wait for the 'ready' event before calling playback methods.", "Await the 'ready' event or check player.readyState before calling play/pause/seek.");
     await this.session.play();
   }
 
@@ -464,19 +467,19 @@ export class UnifiedPlayer {
 
   /** Seek to the given time in seconds. Throws if the player is not ready. */
   async seek(time: number): Promise<void> {
-    if (!this.session) throw new Error("player not ready");
+    if (!this.session) throw new AvbridgeError(ERR_PLAYER_NOT_READY, "Player not ready — wait for the 'ready' event before calling playback methods.", "Await the 'ready' event or check player.readyState before calling play/pause/seek.");
     await this.session.seek(time);
   }
 
   /** Switch the active audio track by track ID. Throws if the player is not ready. */
   async setAudioTrack(id: number): Promise<void> {
-    if (!this.session) throw new Error("player not ready");
+    if (!this.session) throw new AvbridgeError(ERR_PLAYER_NOT_READY, "Player not ready — wait for the 'ready' event before calling playback methods.", "Await the 'ready' event or check player.readyState before calling play/pause/seek.");
     await this.session.setAudioTrack(id);
   }
 
   /** Switch the active subtitle track by track ID, or pass `null` to disable subtitles. */
   async setSubtitleTrack(id: number | null): Promise<void> {
-    if (!this.session) throw new Error("player not ready");
+    if (!this.session) throw new AvbridgeError(ERR_PLAYER_NOT_READY, "Player not ready — wait for the 'ready' event before calling playback methods.", "Await the 'ready' event or check player.readyState before calling play/pause/seek.");
     await this.session.setSubtitleTrack(id);
   }
 

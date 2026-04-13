@@ -1,5 +1,6 @@
 import type { ContainerKind, MediaInput, TransportConfig } from "../types.js";
 import { mergeFetchInit, fetchWith } from "./transport.js";
+import { AvbridgeError, ERR_PROBE_FETCH_FAILED } from "../errors.js";
 
 /**
  * Bytes needed by the sniffer to identify every container we recognize.
@@ -112,10 +113,20 @@ async function fetchUrlForSniff(
       headers: { Range: `bytes=0-${URL_SNIFF_RANGE_BYTES - 1}` },
     })!);
   } catch (err) {
-    throw new Error(`failed to fetch source ${url}: ${(err as Error).message}`);
+    throw new AvbridgeError(
+      ERR_PROBE_FETCH_FAILED,
+      `Failed to fetch source ${url}: ${(err as Error).message}`,
+      "Check that the URL is reachable and CORS is configured. If the source requires authentication, pass requestInit with credentials/headers.",
+    );
   }
   if (!res.ok && res.status !== 206) {
-    throw new Error(`failed to fetch source ${url}: ${res.status} ${res.statusText}`);
+    throw new AvbridgeError(
+      ERR_PROBE_FETCH_FAILED,
+      `Failed to fetch source ${url}: ${res.status} ${res.statusText}`,
+      res.status === 403 || res.status === 401
+        ? "The server rejected the request. Pass requestInit with the required Authorization header or credentials."
+        : "Check that the URL is correct and the server is reachable.",
+    );
   }
 
   // Determine the total file size from Content-Range (preferred) or Content-Length.

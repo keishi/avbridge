@@ -245,7 +245,7 @@ describe("normalizeSource", () => {
       }) as unknown as typeof fetch;
 
       await expect(normalizeSource("https://example.com/fail.mp4"))
-        .rejects.toThrow("failed to fetch source");
+        .rejects.toThrow("Failed to fetch source");
     });
 
     it("throws on non-OK response", async () => {

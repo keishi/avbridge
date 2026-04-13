@@ -42,3 +42,18 @@ export { classify } from "./classify/index.js";
 export { probe } from "./probe/index.js";
 export { remux, transcode } from "./convert/index.js";
 export { srtToVtt } from "./subtitles/srt.js";
+export { AvbridgeError } from "./errors.js";
+export {
+  ERR_PROBE_FAILED,
+  ERR_PROBE_UNKNOWN_CONTAINER,
+  ERR_PROBE_FETCH_FAILED,
+  ERR_CODEC_NOT_SUPPORTED,
+  ERR_STRATEGY_FAILED,
+  ERR_ALL_STRATEGIES_EXHAUSTED,
+  ERR_PLAYER_NOT_READY,
+  ERR_RANGE_NOT_SUPPORTED,
+  ERR_FETCH_FAILED,
+  ERR_LIBAV_NOT_REACHABLE,
+  ERR_MSE_NOT_SUPPORTED,
+  ERR_MSE_CODEC_NOT_SUPPORTED,
+} from "./errors.js";

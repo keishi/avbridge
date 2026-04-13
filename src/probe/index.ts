@@ -1,6 +1,7 @@
 import type { ContainerKind, MediaContext, MediaInput, TransportConfig } from "../types.js";
 import { normalizeSource, sniffNormalizedSource } from "../util/source.js";
 import { probeWithMediabunny } from "./mediabunny.js";
+import { AvbridgeError, ERR_PROBE_FAILED, ERR_PROBE_UNKNOWN_CONTAINER, ERR_LIBAV_NOT_REACHABLE } from "../errors.js";
 
 /** Containers mediabunny can demux. Sniff results outside this set go straight to libav. */
 const MEDIABUNNY_CONTAINERS = new Set<ContainerKind>([
@@ -59,8 +60,10 @@ export async function probe(
       } catch (libavErr) {
         const mbMsg = (mediabunnyErr as Error).message || String(mediabunnyErr);
         const lvMsg = libavErr instanceof Error ? libavErr.message : String(libavErr);
-        throw new Error(
-          `failed to probe ${sniffed} file. mediabunny: ${mbMsg}. libav fallback: ${lvMsg}.`,
+        throw new AvbridgeError(
+          ERR_PROBE_FAILED,
+          `Failed to probe ${sniffed.toUpperCase()} file. mediabunny: ${mbMsg}. libav: ${lvMsg}.`,
+          "The file may be corrupt, truncated, or in an unsupported format. Enable AVBRIDGE_DEBUG for detailed logs.",
         );
       }
     }
@@ -74,10 +77,17 @@ export async function probe(
     const inner = err instanceof Error ? err.message : String(err);
     // eslint-disable-next-line no-console
     console.error("[avbridge] libav probe failed for", sniffed, "file:", err);
-    throw new Error(
-      sniffed === "unknown"
-        ? `unable to probe source: container could not be identified, and the libav.js fallback also failed: ${inner || "(no message — see browser console for the original error)"}`
-        : `${sniffed.toUpperCase()} files require libav.js, which failed to load: ${inner || "(no message — see browser console for the original error)"}`,
+    if (sniffed === "unknown") {
+      throw new AvbridgeError(
+        ERR_PROBE_UNKNOWN_CONTAINER,
+        `Unable to probe source: container format could not be identified. libav fallback: ${inner || "(no details)"}`,
+        "The file may be corrupt or in a format avbridge doesn't recognize. Check the file plays in VLC or ffprobe.",
+      );
+    }
+    throw new AvbridgeError(
+      ERR_LIBAV_NOT_REACHABLE,
+      `${sniffed.toUpperCase()} files require libav.js, which failed to load: ${inner || "(no details)"}`,
+      "Install @libav.js/variant-webcodecs, or check that AVBRIDGE_LIBAV_BASE points to the correct path.",
     );
   }
 }

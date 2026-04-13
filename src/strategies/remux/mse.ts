@@ -3,6 +3,8 @@
  * `SourceBuffer` with an append queue that respects `updateend` backpressure.
  */
 
+import { AvbridgeError, ERR_MSE_NOT_SUPPORTED, ERR_MSE_CODEC_NOT_SUPPORTED } from "../../errors.js";
+
 export interface MseSinkOptions {
   mime: string;
   video: HTMLVideoElement;
@@ -23,10 +25,18 @@ export class MseSink {
 
   constructor(private readonly options: MseSinkOptions) {
     if (typeof MediaSource === "undefined") {
-      throw new Error("MSE not supported in this environment");
+      throw new AvbridgeError(
+        ERR_MSE_NOT_SUPPORTED,
+        "MediaSource Extensions (MSE) are not supported in this environment.",
+        "MSE is required for the remux strategy. Use a browser that supports MSE, or try the fallback strategy.",
+      );
     }
     if (!MediaSource.isTypeSupported(options.mime)) {
-      throw new Error(`MSE does not support MIME "${options.mime}" — cannot remux`);
+      throw new AvbridgeError(
+        ERR_MSE_CODEC_NOT_SUPPORTED,
+        `This browser's MSE does not support "${options.mime}".`,
+        "The codec combination can't be played via remux in this browser. The player will try the next strategy automatically.",
+      );
     }
 
     this.mediaSource = new MediaSource();

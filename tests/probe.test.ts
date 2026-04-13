@@ -140,7 +140,7 @@ describe("probe routing", () => {
     mockLibav.mockRejectedValue(new Error("libav init failed"));
 
     await expect(probe(new Blob([])))
-      .rejects.toThrow(/mediabunny: mediabunny parse error.*libav fallback: libav init failed/);
+      .rejects.toThrow(/mediabunny: mediabunny parse error.*libav: libav init failed/);
   });
 
   it("throws descriptive error when libav fails for AVI", async () => {
@@ -156,6 +156,6 @@ describe("probe routing", () => {
     mockLibav.mockRejectedValue(new Error("no demuxer found"));
 
     await expect(probe(new Blob([])))
-      .rejects.toThrow(/container could not be identified.*no demuxer found/);
+      .rejects.toThrow(/container format could not be identified/);
   });
 });
