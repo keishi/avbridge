@@ -281,6 +281,39 @@ startBtn.addEventListener("click", async () => {
 
   statusEl.textContent = `${mode === "remux" ? "Remuxing" : "Transcoding"} → ${outputFormat.toUpperCase()}…`;
 
+  // For large files: use File System Access API to write progressively
+  // to disk instead of accumulating in memory. Falls back to Blob for
+  // browsers without showSaveFilePicker (Firefox, Safari).
+  let fileHandle: FileSystemFileHandle | null = null;
+  let fileStream: FileSystemWritableFileStream | null = null;
+  const hasFileAccess = typeof (window as unknown as { showSaveFilePicker?: unknown }).showSaveFilePicker === "function";
+  const pickFile = (window as unknown as { showSaveFilePicker: (opts: unknown) => Promise<FileSystemFileHandle> }).showSaveFilePicker;
+
+  if (hasFileAccess && mode === "transcode") {
+    try {
+      const suggestedName = currentContext
+        ? (currentContext.name ?? "output").replace(/\.[^.]+$/, "") + "." + outputFormat
+        : `output.${outputFormat}`;
+      fileHandle = await pickFile({
+        suggestedName,
+        types: [{
+          description: `${outputFormat.toUpperCase()} video`,
+          accept: { [{ mp4: "video/mp4", webm: "video/webm", mkv: "video/x-matroska" }[outputFormat] ?? "video/mp4"]: [`.${outputFormat}`] },
+        }],
+      });
+      fileStream = await fileHandle!.createWritable();
+      statusEl.textContent += " (streaming to file)";
+    } catch (err) {
+      // User cancelled the picker — fall back to in-memory
+      if ((err as Error).name === "AbortError") {
+        fileHandle = null;
+        fileStream = null;
+      } else {
+        throw err;
+      }
+    }
+  }
+
   try {
     let result: ConvertResult;
     if (mode === "remux") {
@@ -323,14 +356,26 @@ startBtn.addEventListener("click", async () => {
         hardwareAcceleration: hwAccelSelect.value as HardwareAccelerationHint,
         signal: abortController.signal,
         onProgress: ({ percent }) => setProgress(percent),
+        outputStream: fileStream ?? undefined,
       });
+    }
+
+    // Close the file stream if we were writing progressively
+    if (fileStream) {
+      await fileStream.close();
+      fileStream = null;
     }
 
     const elapsed = ((performance.now() - startTime) / 1000).toFixed(1);
     currentResult = result;
     setProgress(100);
-    statusEl.textContent = `Done in ${elapsed}s — ${formatBytes(result.blob.size)}`;
-    downloadBtn.classList.remove("hidden");
+    if (fileHandle) {
+      statusEl.textContent = `Done in ${elapsed}s — saved to file`;
+      // No download button needed — already written to disk
+    } else {
+      statusEl.textContent = `Done in ${elapsed}s — ${formatBytes(result.blob.size)}`;
+      downloadBtn.classList.remove("hidden");
+    }
 
     resultInfo.textContent = JSON.stringify(
       {
@@ -349,6 +394,11 @@ startBtn.addEventListener("click", async () => {
     );
   } catch (err) {
     const e = err as Error;
+    // Close file stream on error so partial output is cleaned up
+    if (fileStream) {
+      try { await fileStream.abort(); } catch { /* ignore */ }
+      fileStream = null;
+    }
     if (e.name === "AbortError" || e.message?.includes("canceled")) {
       statusEl.textContent = "Cancelled.";
     } else {

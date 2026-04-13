@@ -316,6 +316,24 @@ export interface ConvertOptions {
   onProgress?: (info: ProgressInfo) => void;
   /** When true, reject on any uncertain codec/container combo. Default: `false` (best-effort). */
   strict?: boolean;
+  /**
+   * Write output progressively to a `WritableStream` instead of accumulating
+   * in memory. Use with the File System Access API (`showSaveFilePicker()`) to
+   * transcode files larger than available memory.
+   *
+   * When set, the returned `ConvertResult.blob` will be an empty Blob (the
+   * real data went to the stream). The caller is responsible for closing the
+   * stream after the returned promise resolves.
+   *
+   * @example
+   * ```ts
+   * const handle = await showSaveFilePicker({ suggestedName: "output.mp4" });
+   * const writable = await handle.createWritable();
+   * const result = await transcode(file, { outputStream: writable });
+   * await writable.close();
+   * ```
+   */
+  outputStream?: WritableStream;
 }
 
 /** Progress information passed to {@link ConvertOptions.onProgress}. */

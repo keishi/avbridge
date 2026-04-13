@@ -79,7 +79,7 @@ async function attemptTranscode(
   audioCodec: OutputAudioCodec,
   quality: TranscodeQuality,
   options: TranscodeOptions,
-): Promise<ArrayBuffer> {
+): Promise<ArrayBuffer | null> {
   const mb = await import("mediabunny");
 
   const input = new mb.Input({
@@ -87,10 +87,25 @@ async function attemptTranscode(
     formats: mb.ALL_FORMATS,
   });
 
-  const target = new mb.BufferTarget();
+  // When outputStream is provided, pipe chunks directly to the stream
+  // instead of accumulating into a buffer. This keeps memory usage flat
+  // regardless of file size.
+  let bytesWritten = 0;
+  const useStream = !!options.outputStream;
+  const bufferTarget = useStream ? null : new mb.BufferTarget();
+  const streamTarget = useStream
+    ? new mb.StreamTarget(new WritableStream({
+        write(chunk: { type: string; data: Uint8Array; position: number }) {
+          bytesWritten += chunk.data.byteLength;
+          const writer = options.outputStream!.getWriter();
+          return writer.write(chunk.data).then(() => writer.releaseLock());
+        },
+      }))
+    : null;
+
   const output = new mb.Output({
     format: createOutputFormat(mb, outputFormat),
-    target,
+    target: (streamTarget ?? bufferTarget)!,
   });
 
   // Build mediabunny ConversionVideoOptions
@@ -160,10 +175,13 @@ async function attemptTranscode(
     }
   }
 
-  if (!target.buffer) {
+  if (useStream) {
+    return null; // data already written to outputStream
+  }
+  if (!bufferTarget!.buffer) {
     throw new Error("Transcode failed: mediabunny produced no output buffer.");
   }
-  return target.buffer;
+  return bufferTarget!.buffer;
 }
 
 /**
@@ -234,14 +252,29 @@ async function doTranscode(
     }
   }
 
+  const mimeType = mimeForFormat(outputFormat);
+  const filename = generateFilename(ctx.name, outputFormat);
+
+  if (options.outputStream) {
+    // Streaming mode — data already written to the stream. Return empty blob.
+    options.onProgress?.({ percent: 100, bytesWritten: 0 });
+    return {
+      blob: new Blob([], { type: mimeType }),
+      mimeType,
+      container: outputFormat,
+      videoCodec: options.dropVideo ? undefined : videoCodec,
+      audioCodec: options.dropAudio ? undefined : audioCodec,
+      duration: ctx.duration,
+      filename,
+      ...(notes.length > 0 ? { notes } : {}),
+    };
+  }
+
   if (!buffer) {
     throw new Error("Transcode failed: no buffer produced (this should be unreachable).");
   }
 
-  const mimeType = mimeForFormat(outputFormat);
   const blob = new Blob([buffer], { type: mimeType });
-  const filename = generateFilename(ctx.name, outputFormat);
-
   options.onProgress?.({ percent: 100, bytesWritten: blob.size });
 
   return {
