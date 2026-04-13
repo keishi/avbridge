@@ -3,7 +3,7 @@
 Internal design docs, vision, roadmap, and component specs. Not shipped to
 npm — these are for contributors and maintainers.
 
-If you're a **user** of avbridge, the [main README](../../README.md) is what
+If you're a **user** of avbridge.js, the [main README](../../README.md) is what
 you're looking for.
 
 ## Index

@@ -1,9 +1,9 @@
 # Third-party license texts
 
 This document contains the full license text of every third-party
-component bundled with avbridge. The short overview lives in
+component bundled with avbridge.js. The short overview lives in
 [NOTICE.md](./NOTICE.md); this file is what you need if you redistribute
-avbridge and have to comply with the underlying licenses.
+avbridge.js and have to comply with the underlying licenses.
 
 ---
 

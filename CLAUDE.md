@@ -4,7 +4,16 @@ Project primer for Claude Code sessions working in this repo. Not a
 duplicate of `README.md` — that's for library users; this is for the
 agent editing the code. Read this first.
 
-## What avbridge is
+## Naming convention
+
+The public-facing name is **avbridge.js** (used in README, docs,
+demo pages, changelogs). The npm package name stays `avbridge` and all
+code identifiers (`AvbridgeError`, `<avbridge-video>`,
+`<avbridge-player>`, import paths, CSS class prefixes) are unchanged.
+Console log prefixes stay `[avbridge:*]`. When writing user-facing
+prose, use "avbridge.js"; when writing code, use "avbridge".
+
+## What avbridge.js is
 
 A browser media compatibility layer. Probes any media file
 (`probe()`), routes it to one of four playback strategies via

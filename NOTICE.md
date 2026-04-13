@@ -1,10 +1,10 @@
 # Third-party notices
 
-avbridge is distributed under the MIT License (see [LICENSE](./LICENSE)).
+avbridge.js is distributed under the MIT License (see [LICENSE](./LICENSE)).
 
 This package **bundles binary builds** of third-party libraries. Each
 bundled library retains its original license, which you must honor if you
-redistribute avbridge or works that include it.
+redistribute avbridge.js or works that include it.
 
 See [THIRD_PARTY_LICENSES.md](./THIRD_PARTY_LICENSES.md) for the full
 license texts. This file is a short index.

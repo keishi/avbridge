@@ -1,11 +1,10 @@
-# avbridge
+# avbridge.js
 
 [![npm](https://img.shields.io/npm/v/avbridge.svg)](https://www.npmjs.com/package/avbridge)
-[![bundle size](https://img.shields.io/bundlephobia/minzip/avbridge?label=gzipped)](https://bundlephobia.com/package/avbridge)
 [![license](https://img.shields.io/npm/l/avbridge.svg)](./LICENSE)
 [![CI](https://img.shields.io/github/actions/workflow/status/keishi/avbridge/ci.yml?branch=main&label=CI)](https://github.com/keishi/avbridge/actions/workflows/ci.yml)
 
-> **Play and convert arbitrary video files in the browser. Local files or remote URLs.**
+> **VLC-style media playback for the browser. Play and convert arbitrary video files — local or remote.**
 
 A media compatibility layer for the web. Drop in any file — MP4, MKV, AVI,
 WMV, FLV, MPEG-TS, DivX, RMVB — and avbridge picks the best path: native

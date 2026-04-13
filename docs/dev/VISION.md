@@ -1,8 +1,8 @@
-# avbridge — Vision Document
+# avbridge.js — Vision Document
 
 ## 1. Vision
 
-**avbridge** is a browser-native media engine that enables:
+**avbridge.js** is a browser-native media engine that enables:
 
 > **Playback, remuxing, and transcoding of arbitrary audio/video files directly in the browser.**
 

@@ -1,8 +1,8 @@
-# avbridge — Resilient Playback & Media Repair Vision
+# avbridge.js — Resilient Playback & Media Repair Vision
 
 ## 1. Overview
 
-Beyond playback and transcoding, **avbridge** aims to become:
+Beyond playback and transcoding, **avbridge.js** aims to become:
 
 > **A resilient media engine that can recover, repair, and play damaged or malformed media files in the browser.**
 

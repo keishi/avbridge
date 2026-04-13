@@ -1,4 +1,4 @@
-# avbridge — Roadmap
+# avbridge.js — Roadmap
 
 Current release: **v2.2.1** (2026-04-12)
 

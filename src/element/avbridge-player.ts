@@ -76,7 +76,7 @@ export class AvbridgePlayerElement extends HTMLElement {
   private _settingsBtn!: HTMLButtonElement;
   private _settingsMenu!: HTMLDivElement;
   private _fullscreenBtn!: HTMLButtonElement;
-  private _badge!: HTMLSpanElement;
+  // Strategy badge removed — visible in Stats for Nerds instead.
   // Spinner is rendered but driven entirely by CSS :host([data-state]) selectors.
   private _speedIndicator!: HTMLDivElement;
   private _rippleLeft!: HTMLDivElement;
@@ -91,8 +91,11 @@ export class AvbridgePlayerElement extends HTMLElement {
   private _holdTimer: ReturnType<typeof setTimeout> | null = null;
   private _holdSpeedActive = false;
   private _savedPlaybackRate = 1;
-  private _doubleTapTimer: ReturnType<typeof setTimeout> | null = null;
   private _lastTapTime = 0;
+  private _tapTimer: ReturnType<typeof setTimeout> | null = null;
+  private _statsOpen = false;
+  private _statsEl!: HTMLDivElement;
+  private _statsInterval: ReturnType<typeof setInterval> | null = null;
   private _eventCleanup: (() => void)[] = [];
 
   // ── Constructor ────────────────────────────────────────────────────────
@@ -117,9 +120,10 @@ export class AvbridgePlayerElement extends HTMLElement {
     this._settingsBtn = shadow.querySelector(".avp-settings-btn") as HTMLButtonElement;
     this._settingsMenu = shadow.querySelector(".avp-settings") as HTMLDivElement;
     this._fullscreenBtn = shadow.querySelector(".avp-fullscreen") as HTMLButtonElement;
-    this._badge = shadow.querySelector(".avp-badge") as HTMLSpanElement;
+    // Badge removed from controls bar — strategy visible in Stats for Nerds.
     // Spinner is rendered in shadow DOM, driven by CSS :host([data-state]).
     this._speedIndicator = shadow.querySelector(".avp-speed-indicator") as HTMLDivElement;
+    this._statsEl = shadow.querySelector(".avp-stats") as HTMLDivElement;
     this._rippleLeft = shadow.querySelector(".avp-ripple-left") as HTMLDivElement;
     this._rippleRight = shadow.querySelector(".avp-ripple-right") as HTMLDivElement;
 
@@ -135,6 +139,7 @@ export class AvbridgePlayerElement extends HTMLElement {
     <div class="avp-spinner"></div>
   </div>
   <div class="avp-speed-indicator">2x</div>
+  <div class="avp-stats" part="stats-panel"></div>
   <div class="avp-ripple avp-ripple-left">${ICON_REPLAY_10}</div>
   <div class="avp-ripple avp-ripple-right">${ICON_FORWARD_10}</div>
   <div part="controls" class="avp-controls">
@@ -157,7 +162,6 @@ export class AvbridgePlayerElement extends HTMLElement {
       </div>
       <span class="avp-time" part="time-display">0:00 / 0:00</span>
       <span class="avp-spacer"></span>
-      <span class="avp-badge" part="strategy-badge"></span>
       <button class="avp-btn avp-settings-btn" part="settings-button" aria-label="Settings">${ICON_SETTINGS}</button>
       <button class="avp-btn avp-fullscreen" part="fullscreen-button" aria-label="Fullscreen">${ICON_FULLSCREEN}</button>
     </div>
@@ -194,7 +198,6 @@ export class AvbridgePlayerElement extends HTMLElement {
       this._setState(this._video.paused ? "paused" : "playing");
       this._seekInput.max = String(this._video.duration || 0);
       this._updateTime();
-      this._updateBadge();
       this._buildSettingsMenu();
     });
     on(this._video, "play", () => this._setState("playing"));
@@ -205,7 +208,7 @@ export class AvbridgePlayerElement extends HTMLElement {
     on(this._video, "error", () => this._setState("error"));
     on(this._video, "timeupdate", () => this._updateTime());
     on(this._video, "volumechange", () => this._updateVolume());
-    on(this._video, "strategychange", () => this._updateBadge());
+    // Strategy changes are visible in Stats for Nerds.
     on(this._video, "trackschange", () => this._buildSettingsMenu());
     on(this._video, "durationchange", () => {
       this._seekInput.max = String(this._video.duration || 0);
@@ -224,8 +227,12 @@ export class AvbridgePlayerElement extends HTMLElement {
     // Volume
     on(this._volumeBtn, "click", (e) => { e.stopPropagation(); this._toggleMute(); });
     on(this._volumeInput, "input", () => {
-      this._video.volume = Number(this._volumeInput.value);
+      const vol = Number(this._volumeInput.value);
+      this._video.volume = vol;
+      this._video.videoElement.volume = vol;
       this._video.muted = false;
+      this._video.videoElement.muted = false;
+      this._updateVolume();
     });
 
     // Settings
@@ -235,15 +242,33 @@ export class AvbridgePlayerElement extends HTMLElement {
     on(this._fullscreenBtn, "click", (e) => { e.stopPropagation(); this._toggleFullscreen(); });
     on(document, "fullscreenchange", () => this._updateFullscreenIcon());
 
-    // Click on video area
+    // Click / tap on video area — uses a delayed-tap pattern (like YouTube)
+    // to distinguish single-tap (play/pause) from double-tap (seek ±10s).
+    // On mouse: single click → play/pause, dblclick → fullscreen.
+    // On touch: single tap (after 250ms) → play/pause, double tap → seek.
     const container = this.shadowRoot!.querySelector(".avp")!;
-    on(container, "click", () => this._togglePlay());
+    on(container, "click", (e) => this._onContainerClick(e as MouseEvent));
+    on(container, "dblclick", (e) => this._onContainerDblClick(e as MouseEvent));
+
+    // Dismiss settings menu on click outside (inside or outside the player)
+    on(container, "click", (e) => {
+      if (this._settingsOpen &&
+          !(e.target as HTMLElement).closest?.(".avp-settings-btn, .avp-settings")) {
+        this._closeSettings();
+      }
+    });
+    // Also dismiss if user clicks outside the player element entirely
+    on(document, "click", (e) => {
+      if (this._settingsOpen && !this.contains(e.target as Node)) {
+        this._closeSettings();
+      }
+    });
 
     // Auto-hide controls
     on(container, "pointermove", () => this._showControls());
     on(container, "pointerleave", () => this._scheduleHide());
 
-    // Touch gestures
+    // Touch gestures: hold for 2x speed
     on(container, "pointerdown", (e) => this._onPointerDown(e as PointerEvent));
     on(container, "pointerup", (e) => this._onPointerUp(e as PointerEvent));
     on(container, "pointercancel", () => this._cancelHold());
@@ -350,11 +375,17 @@ export class AvbridgePlayerElement extends HTMLElement {
   // ── Controls: volume ───────────────────────────────────────────────────
 
   private _toggleMute(): void {
-    this._video.muted = !this._video.muted;
+    // Set both the element attribute AND the inner <video> property directly,
+    // because avbridge-video's attribute-based muted toggling can diverge
+    // from the <video> property on a running element.
+    const newMuted = !this._video.muted;
+    this._video.muted = newMuted;
+    this._video.videoElement.muted = newMuted;
+    this._updateVolume();
   }
 
   private _updateVolume(): void {
-    const muted = this._video.muted || this._video.volume === 0;
+    const muted = this._video.muted || this._video.videoElement.muted || this._video.volume === 0;
     this._volumeBtn.innerHTML = muted ? ICON_VOLUME_OFF : ICON_VOLUME_UP;
     this._volumeInput.value = muted ? "0" : String(this._video.volume);
   }
@@ -405,6 +436,9 @@ export class AvbridgePlayerElement extends HTMLElement {
       sections.push(`<div class="avp-settings-section"><div class="avp-settings-label">Audio</div>${audioItems}</div>`);
     }
 
+    // Stats for nerds
+    sections.push(`<div class="avp-settings-section"><div class="avp-settings-item" data-stats>Stats for nerds</div></div>`);
+
     this._settingsMenu.innerHTML = sections.join("");
 
     // Bind click handlers
@@ -430,6 +464,50 @@ export class AvbridgePlayerElement extends HTMLElement {
         this._closeSettings();
       });
     }
+    const statsItem = this._settingsMenu.querySelector("[data-stats]");
+    if (statsItem) {
+      statsItem.addEventListener("click", (e) => {
+        e.stopPropagation();
+        this._toggleStats();
+        this._closeSettings();
+      });
+    }
+  }
+
+  // ── Stats for nerds ────────────────────────────────────────────────────
+
+  private _toggleStats(): void {
+    this._statsOpen = !this._statsOpen;
+    this._statsEl.classList.toggle("open", this._statsOpen);
+    if (this._statsOpen) {
+      this._updateStats();
+      this._statsInterval = setInterval(() => this._updateStats(), 1000);
+    } else {
+      if (this._statsInterval) { clearInterval(this._statsInterval); this._statsInterval = null; }
+    }
+  }
+
+  private _updateStats(): void {
+    const d = this._video.getDiagnostics() as Record<string, unknown> | null;
+    if (!d) { this._statsEl.textContent = "No diagnostics"; return; }
+    const rt = (d.runtime ?? {}) as Record<string, unknown>;
+    const lines: string[] = [
+      `Container: ${d.container ?? "?"}`,
+      `Video: ${d.videoCodec ?? "?"} ${d.width ?? "?"}×${d.height ?? "?"}`,
+      `Audio: ${d.audioCodec ?? "none"}`,
+      `Strategy: ${d.strategy ?? "?"}  Class: ${d.strategyClass ?? "?"}`,
+      `Transport: ${d.transport ?? "?"} Range: ${d.rangeSupported ?? "?"}`,
+      `Duration: ${typeof d.duration === "number" ? d.duration.toFixed(1) + "s" : "?"}`,
+    ];
+    if (rt.framesDecoded != null) lines.push(`Frames: ${rt.framesDecoded} decoded, ${rt.framesDropped ?? 0} dropped`);
+    if (rt.framesPainted != null) lines.push(`Painted: ${rt.framesPainted} Late: ${rt.framesDroppedLate ?? 0} Overflow: ${rt.framesDroppedOverflow ?? 0}`);
+    if (rt.videoFramesDecoded != null) lines.push(`Video decoded: ${rt.videoFramesDecoded} Chunks fed: ${rt.videoChunksFed ?? "?"}`);
+    if (rt.audioFramesDecoded != null) lines.push(`Audio decoded: ${rt.audioFramesDecoded}`);
+    if (rt.packetsRead != null) lines.push(`Packets read: ${rt.packetsRead}`);
+    if (rt.bsfApplied && (rt.bsfApplied as string[]).length > 0) lines.push(`BSF: ${(rt.bsfApplied as string[]).join(", ")}`);
+    if (rt.audioState != null) lines.push(`Audio state: ${rt.audioState} Clock: ${rt.clockMode ?? "?"}`);
+    if (d.probedBy) lines.push(`Probed by: ${d.probedBy}`);
+    this._statsEl.textContent = lines.join("\n");
   }
 
   // ── Controls: fullscreen ───────────────────────────────────────────────
@@ -465,12 +543,43 @@ export class AvbridgePlayerElement extends HTMLElement {
     }, CONTROLS_HIDE_MS);
   }
 
-  // ── Controls: strategy badge ───────────────────────────────────────────
+  // Strategy is visible in Stats for Nerds, no badge in controls bar.
 
-  private _updateBadge(): void {
-    const s = this._video.strategy ?? "";
-    this._badge.textContent = s;
-    this._badge.dataset.strategy = s;
+  // ── Click / tap handling (YouTube delayed-tap pattern) ──────────────────
+  //
+  // Problem: single click toggles play, double click toggles fullscreen (or
+  // seek on touch). Firing play on the first click causes a play→pause
+  // glitch on every double-click. YouTube solves this by delaying the
+  // single-click action by ~250ms; if a second click arrives in that window
+  // it's treated as a double-click and the single-click action is cancelled.
+
+  /** Track whether the last interaction was touch so click handler can skip. */
+  private _lastPointerTypeWasTouch = false;
+
+  private _onContainerClick(e: MouseEvent): void {
+    // Ignore clicks on controls
+    if ((e.target as HTMLElement).closest?.(".avp-controls, .avp-settings, .avp-overlay-btn")) return;
+
+    // Touch taps are handled by _onPointerUp (show/hide controls + double-tap).
+    // The browser fires a synthetic click after touchend — skip it.
+    if (this._lastPointerTypeWasTouch) {
+      this._lastPointerTypeWasTouch = false;
+      return;
+    }
+
+    // Mouse: delay single-click to let dblclick cancel it
+    if (this._tapTimer) { clearTimeout(this._tapTimer); this._tapTimer = null; }
+    this._tapTimer = setTimeout(() => {
+      this._tapTimer = null;
+      this._togglePlay();
+    }, 250);
+  }
+
+  private _onContainerDblClick(e: MouseEvent): void {
+    if ((e.target as HTMLElement).closest?.(".avp-controls, .avp-settings")) return;
+    // Cancel the pending single-click play/pause
+    if (this._tapTimer) { clearTimeout(this._tapTimer); this._tapTimer = null; }
+    this._toggleFullscreen();
   }
 
   // ── Touch gestures ─────────────────────────────────────────────────────
@@ -488,12 +597,17 @@ export class AvbridgePlayerElement extends HTMLElement {
 
   private _onPointerUp(e: PointerEvent): void {
     this._cancelHold();
-
     if (e.pointerType !== "touch") return;
+    this._lastPointerTypeWasTouch = true;
+
+    // Ignore touches on controls — buttons have their own handlers
+    if ((e.target as HTMLElement).closest?.(".avp-controls, .avp-settings, .avp-overlay-btn")) return;
 
     // Double-tap detection
     const now = Date.now();
     if (now - this._lastTapTime < 300) {
+      // Double tap — cancel pending single tap and seek
+      if (this._tapTimer) { clearTimeout(this._tapTimer); this._tapTimer = null; }
       const rect = this.getBoundingClientRect();
       const x = e.clientX - rect.left;
       if (x < rect.width / 3) {
@@ -506,7 +620,17 @@ export class AvbridgePlayerElement extends HTMLElement {
       this._lastTapTime = 0;
       return;
     }
+    // Single tap on touch — toggle controls visibility (NOT play/pause).
+    // YouTube mobile: tap shows/hides controls. Play button toggles playback.
     this._lastTapTime = now;
+    this._tapTimer = setTimeout(() => {
+      this._tapTimer = null;
+      if (this.hasAttribute("data-controls-hidden")) {
+        this._showControls();
+      } else {
+        this.setAttribute("data-controls-hidden", "");
+      }
+    }, 250);
   }
 
   private _cancelHold(): void {
@@ -595,7 +719,8 @@ export class AvbridgePlayerElement extends HTMLElement {
   private _clearTimers(): void {
     if (this._controlsTimer) { clearTimeout(this._controlsTimer); this._controlsTimer = null; }
     if (this._holdTimer) { clearTimeout(this._holdTimer); this._holdTimer = null; }
-    if (this._doubleTapTimer) { clearTimeout(this._doubleTapTimer); this._doubleTapTimer = null; }
+    if (this._tapTimer) { clearTimeout(this._tapTimer); this._tapTimer = null; }
+    if (this._statsInterval) { clearInterval(this._statsInterval); this._statsInterval = null; }
   }
 
   // ── Property proxies ───────────────────────────────────────────────────

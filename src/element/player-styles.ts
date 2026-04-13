@@ -303,9 +303,12 @@ export const PLAYER_STYLES = /* css */ `
   transition: width 0.15s;
   display: flex;
   align-items: center;
+  /* Extra padding so the thumb isn't clipped at track edges */
+  padding: 6px 0;
+  margin: -6px 0;
 }
 
-.avp-volume:hover .avp-volume-slider { width: 60px; }
+.avp-volume:hover .avp-volume-slider { width: 68px; }
 
 .avp-volume-input {
   width: 60px;
@@ -316,6 +319,9 @@ export const PLAYER_STYLES = /* css */ `
   border-radius: 2px;
   outline: none;
   cursor: pointer;
+  /* Prevent thumb clipping — the thumb is taller than the track */
+  overflow: visible;
+  margin: 0;
 }
 
 .avp-volume-input::-webkit-slider-thumb {
@@ -324,6 +330,15 @@ export const PLAYER_STYLES = /* css */ `
   height: 12px;
   border-radius: 50%;
   background: #fff;
+  cursor: pointer;
+}
+
+.avp-volume-input::-moz-range-thumb {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #fff;
+  border: none;
   cursor: pointer;
 }
 
@@ -411,6 +426,28 @@ export const PLAYER_STYLES = /* css */ `
   margin-right: 8px;
   font-weight: bold;
 }
+
+/* ── Stats for nerds ──────────────────────────────────────────────────── */
+
+.avp-stats {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  background: rgba(0, 0, 0, 0.8);
+  padding: 12px 16px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-family: "SF Mono", "Menlo", "Consolas", monospace;
+  line-height: 1.6;
+  white-space: pre;
+  pointer-events: auto;
+  z-index: 6;
+  max-width: 400px;
+  overflow: auto;
+  display: none;
+}
+
+.avp-stats.open { display: block; }
 
 /* ── Mobile adjustments ───────────────────────────────────────────────── */
 

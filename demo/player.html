@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black" />
+    <title>avbridge.js player</title>
+    <style>
+      :root { color-scheme: dark; }
+      * { box-sizing: border-box; }
+      body { font-family: system-ui, sans-serif; background: #111; color: #eee; margin: 0; padding: 16px; max-width: 960px; margin: 0 auto; -webkit-text-size-adjust: 100%; }
+      h1 { margin-top: 0; font-size: clamp(18px, 4vw, 28px); }
+
+      .player-wrap { width: 100%; aspect-ratio: 16/9; background: #000; border-radius: 8px; overflow: hidden; touch-action: none; }
+      .player-wrap avbridge-player { width: 100%; height: 100%; }
+
+      .row { display: flex; gap: 12px; align-items: center; margin: 12px 0; flex-wrap: wrap; }
+      input[type="file"] { color: #eee; font-size: 14px; max-width: 100%; }
+      label { font-size: 14px; }
+      details { margin-top: 16px; background: #1a1a1a; padding: 12px; border-radius: 8px; }
+      pre { white-space: pre-wrap; word-break: break-word; font-size: 12px; }
+      .err { color: #ff8585; }
+
+      @media (max-width: 600px) {
+        body { padding: 8px; }
+        .row { gap: 8px; }
+        h1 { margin-bottom: 8px; }
+        details { padding: 8px; }
+      }
+    </style>
+  </head>
+  <body>
+    <h1>avbridge.js player</h1>
+    <p>
+      <a href="./" style="color:#5b9;">Classic</a> ·
+      <a href="./player.html" style="color:#5b9;">Player</a> ·
+      <a href="./convert.html" style="color:#5b9;">Converter</a>
+    </p>
+    <p>Pick a media file. <code>&lt;avbridge-player&gt;</code> handles all controls — play/pause, seek, volume, settings, fullscreen, keyboard shortcuts, and touch gestures.</p>
+
+    <div class="row">
+      <label>Media file: <input id="file" type="file" accept="video/*,audio/*,.mkv,.avi,.wmv,.flv,.mov,.rm,.rmvb" /></label>
+      <label>Subtitle (optional): <input id="subs" type="file" accept=".srt,.vtt" /></label>
+    </div>
+
+    <div class="player-wrap">
+      <avbridge-player id="player"></avbridge-player>
+    </div>
+
+    <p id="error" class="err"></p>
+
+    <details open>
+      <summary>Diagnostics</summary>
+      <pre id="diagnostics">{}</pre>
+    </details>
+
+    <script>
+      window.AVBRIDGE_LIBAV_BASE = "/libav";
+    </script>
+    <script type="module" src="./player-demo.ts"></script>
+  </body>
+</html>
