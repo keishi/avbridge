@@ -154,44 +154,53 @@ export class VideoRenderer {
       return;
     }
 
-    // Wall-clock-paced painting with coarse A/V drift correction.
+    // PTS-based painting: find the latest frame whose presentation time
+    // has arrived (timestamp ≤ audio clock), paint it, and discard any
+    // older frames. This produces correct cadence at any display refresh
+    // rate and any source fps — no 3:2 pulldown artifacts.
     //
-    // Base policy: paint one frame every `paintIntervalMs` of wall time,
-    // regardless of the frame's synthetic timestamp. This avoids the old
-    // per-frame audio-gate that caused massive overflow during decode bursts.
-    //
-    // Drift correction (runs every ~1 sec):
-    //   - Video > 150 ms behind audio → drop one frame (catch up)
-    //   - Video > 150 ms ahead of audio → skip one paint (let audio catch up)
-    //
-    // This keeps long-run sync robust even for legacy AVI/DivX with messy
-    // timestamps, packed B-frames, and odd frame durations. The correction
-    // is deliberately gentle (one frame at a time) so it doesn't cause
-    // visible stuttering.
-    const wallNow = performance.now();
-    if (wallNow - this.lastPaintWall < this.paintIntervalMs - 2) return;
+    // Fallback: if frame timestamps are unreliable (all zero, synthetic),
+    // fall back to wall-clock pacing as before.
+    const audioNowUs = this.clock.now() * 1_000_000;
+    const headTs = this.queue[0].timestamp ?? 0;
+    const hasPts = headTs > 0 || this.queue.length > 1;
 
-    if (this.queue.length === 0) return;
+    if (hasPts) {
+      // PTS mode: find the latest frame that should be displayed now.
+      // Drop any frames that are too old (video behind audio).
+      let bestIdx = -1;
+      for (let i = 0; i < this.queue.length; i++) {
+        const ts = this.queue[i].timestamp ?? 0;
+        if (ts <= audioNowUs + this.paintIntervalMs * 500) {
+          // This frame's PTS has arrived or is within half a frame of now
+          bestIdx = i;
+        } else {
+          break; // queue is in PTS order — future frames are later
+        }
+      }
 
-    // Coarse drift correction: compare the head frame's timestamp to
-    // audio.now() every ~1 sec (every 30 frames at 30fps). The frame ts
-    // and audio.now() are both in seconds of media time. Drift beyond
-    // 150ms triggers gentle correction — one frame per check, not a burst.
-    if (this.framesPainted > 0 && this.framesPainted % 30 === 0) {
-      const audioNowUs = this.clock.now() * 1_000_000;
-      const headTs = this.queue[0].timestamp ?? 0;
-      const driftUs = headTs - audioNowUs;
-
-      if (driftUs < -150_000) {
-        // Video behind audio by > 150ms — drop one frame to catch up.
-        this.queue.shift()?.close();
-        this.framesDroppedLate++;
-        if (this.queue.length === 0) return;
-      } else if (driftUs > 150_000) {
-        // Video ahead of audio by > 150ms — skip this paint cycle.
+      if (bestIdx < 0) {
+        // All frames are in the future — wait (video ahead of audio)
         return;
       }
+
+      // Drop any frames before bestIdx (they're late / stale)
+      for (let i = 0; i < bestIdx; i++) {
+        this.queue.shift()?.close();
+        this.framesDroppedLate++;
+      }
+
+      const frame = this.queue.shift()!;
+      this.paint(frame);
+      frame.close();
+      this.lastPaintWall = performance.now();
+      return;
     }
+
+    // Wall-clock fallback: used when timestamps are unreliable (all zero).
+    // Paint one frame every paintIntervalMs of wall time.
+    const wallNow = performance.now();
+    if (wallNow - this.lastPaintWall < this.paintIntervalMs - 2) return;
 
     const frame = this.queue.shift()!;
     this.paint(frame);
