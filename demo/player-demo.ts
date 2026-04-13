@@ -2,8 +2,12 @@
 // Almost all UI logic is handled by the element itself. This file is
 // just the file picker and diagnostics panel glue.
 
-import "../src/player-element.js";
-import type { AvbridgePlayerElement } from "../src/element/avbridge-player.js";
+// Import the class and register it directly — Rollup tree-shakes
+// side-effect-only imports, so we must use the import concretely.
+import { AvbridgePlayerElement } from "../src/player-element.js";
+if (!customElements.get("avbridge-player")) {
+  customElements.define("avbridge-player", AvbridgePlayerElement);
+}
 
 const fileInput = document.getElementById("file") as HTMLInputElement;
 const subInput = document.getElementById("subs") as HTMLInputElement;
