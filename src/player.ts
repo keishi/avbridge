@@ -41,6 +41,15 @@ export class UnifiedPlayer {
   // source (e.g. <avbridge-video>).
   private endedListener: (() => void) | null = null;
 
+  // Background tab handling. userIntent is what the user last asked for
+  // (play vs pause) — used to decide whether to auto-resume on visibility
+  // return. autoPausedForVisibility tracks whether we paused because the
+  // tab was hidden, so we don't resume playback the user deliberately
+  // paused (e.g. via media keys while hidden).
+  private userIntent: "play" | "pause" = "pause";
+  private autoPausedForVisibility = false;
+  private visibilityListener: (() => void) | null = null;
+
   // Serializes escalation / setStrategy calls
   private switchingPromise: Promise<void> = Promise.resolve();
 
@@ -164,6 +173,15 @@ export class UnifiedPlayer {
       this.startTimeupdateLoop();
       this.endedListener = () => this.emitter.emit("ended", undefined);
       this.options.target.addEventListener("ended", this.endedListener);
+
+      // Auto-pause on background tab (unless explicitly opted out).
+      // Chrome throttles rAF and setTimeout in hidden tabs, so playback
+      // degrades anyway — better to pause cleanly and resume on return.
+      if (this.options.backgroundBehavior !== "continue" && typeof document !== "undefined") {
+        this.visibilityListener = () => this.onVisibilityChange();
+        document.addEventListener("visibilitychange", this.visibilityListener);
+      }
+
       this.emitter.emitSticky("ready", undefined);
       const bootstrapElapsed = performance.now() - bootstrapStart;
       dbg.info("bootstrap", `ready in ${bootstrapElapsed.toFixed(0)}ms`);
@@ -457,12 +475,44 @@ export class UnifiedPlayer {
   /** Begin or resume playback. Throws if the player is not ready. */
   async play(): Promise<void> {
     if (!this.session) throw new AvbridgeError(ERR_PLAYER_NOT_READY, "Player not ready — wait for the 'ready' event before calling playback methods.", "Await the 'ready' event or check player.readyState before calling play/pause/seek.");
+    this.userIntent = "play";
+    this.autoPausedForVisibility = false;
     await this.session.play();
   }
 
   /** Pause playback. No-op if the player is not ready or already paused. */
   pause(): void {
+    this.userIntent = "pause";
+    this.autoPausedForVisibility = false;
     this.session?.pause();
+  }
+
+  /**
+   * Handle browser tab visibility changes. On hide: pause if the user
+   * had been playing. On show: resume if we were the one who paused.
+   * Skips when `backgroundBehavior: "continue"` is set (listener isn't
+   * installed in that case).
+   */
+  private onVisibilityChange(): void {
+    if (!this.session) return;
+    const action = decideVisibilityAction({
+      hidden: document.hidden,
+      userIntent: this.userIntent,
+      sessionIsPlaying: !this.options.target.paused,
+      autoPausedForVisibility: this.autoPausedForVisibility,
+    });
+    if (action === "pause") {
+      this.autoPausedForVisibility = true;
+      dbg.info("visibility", "tab hidden — auto-paused");
+      this.session.pause();
+    } else if (action === "resume") {
+      this.autoPausedForVisibility = false;
+      dbg.info("visibility", "tab visible — auto-resuming");
+      void this.session.play().catch((err) => {
+        // eslint-disable-next-line no-console
+        console.warn("[avbridge] auto-resume after tab return failed:", err);
+      });
+    }
   }
 
   /** Seek to the given time in seconds. Throws if the player is not ready. */
@@ -515,6 +565,10 @@ export class UnifiedPlayer {
       this.options.target.removeEventListener("ended", this.endedListener);
       this.endedListener = null;
     }
+    if (this.visibilityListener) {
+      document.removeEventListener("visibilitychange", this.visibilityListener);
+      this.visibilityListener = null;
+    }
     if (this.session) {
       await this.session.destroy();
       this.session = null;
@@ -528,6 +582,29 @@ export class UnifiedPlayer {
 
 export async function createPlayer(options: CreatePlayerOptions): Promise<UnifiedPlayer> {
   return UnifiedPlayer.create(options);
+}
+
+/**
+ * Pure decision function for visibility-change handling. Separated from
+ * the class method so it can be unit-tested without a full player
+ * instance.
+ *
+ * @internal — exported for unit tests; not part of the public API.
+ */
+export function decideVisibilityAction(state: {
+  hidden: boolean;
+  userIntent: "play" | "pause";
+  sessionIsPlaying: boolean;
+  autoPausedForVisibility: boolean;
+}): "pause" | "resume" | "noop" {
+  if (state.hidden) {
+    // Tab hidden: pause if user had been playing and session is active
+    if (state.userIntent === "play" && state.sessionIsPlaying) return "pause";
+    return "noop";
+  }
+  // Tab visible: resume only if we're the one who paused
+  if (state.autoPausedForVisibility) return "resume";
+  return "noop";
 }
 
 /**

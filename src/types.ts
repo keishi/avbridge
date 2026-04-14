@@ -259,6 +259,17 @@ export interface CreatePlayerOptions {
    */
   autoEscalate?: boolean;
   /**
+   * Behavior when the browser tab becomes hidden.
+   * - `"pause"` (default): auto-pause on hide, auto-resume on visible
+   *   if the user had been playing. Matches YouTube, Netflix, and
+   *   native media players. Prevents degraded playback from Chrome's
+   *   background throttling of requestAnimationFrame and setTimeout.
+   * - `"continue"`: keep playing. Playback will degrade anyway due to
+   *   browser throttling, but useful for consumers who want full
+   *   control of visibility handling themselves.
+   */
+  backgroundBehavior?: "pause" | "continue";
+  /**
    * Extra {@link RequestInit} merged into every HTTP request the player
    * makes (probe Range requests, subtitle fetches, libav HTTP reader).
    * Headers are merged, not overwritten — so you can add `Authorization`

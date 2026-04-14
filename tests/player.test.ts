@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, vi } from "vitest";
-import { buildInitialDecision } from "../src/player.js";
+import { buildInitialDecision, decideVisibilityAction } from "../src/player.js";
 import { SubtitleResourceBag } from "../src/subtitles/index.js";
 import { Diagnostics } from "../src/diagnostics.js";
 import type { MediaContext } from "../src/types.js";
@@ -110,6 +110,85 @@ describe("buildInitialDecision", () => {
     expect(decision.strategy).toBe("remux");
     expect(decision.fallbackChain).not.toContain("remux");
     expect(decision.fallbackChain).toEqual(["hybrid", "fallback"]);
+  });
+});
+
+describe("decideVisibilityAction (background tab pause/resume)", () => {
+  // State transitions for the visibility-change handler. Pure function,
+  // no DOM — tested exhaustively so the state machine is correct.
+
+  it("pauses when tab hides and user was playing", () => {
+    const action = decideVisibilityAction({
+      hidden: true,
+      userIntent: "play",
+      sessionIsPlaying: true,
+      autoPausedForVisibility: false,
+    });
+    expect(action).toBe("pause");
+  });
+
+  it("no-op when tab hides and user already paused", () => {
+    const action = decideVisibilityAction({
+      hidden: true,
+      userIntent: "pause",
+      sessionIsPlaying: false,
+      autoPausedForVisibility: false,
+    });
+    expect(action).toBe("noop");
+  });
+
+  it("no-op when tab hides but session wasn't playing (e.g. still buffering)", () => {
+    const action = decideVisibilityAction({
+      hidden: true,
+      userIntent: "play",
+      sessionIsPlaying: false,
+      autoPausedForVisibility: false,
+    });
+    expect(action).toBe("noop");
+  });
+
+  it("resumes when tab becomes visible and we had auto-paused", () => {
+    const action = decideVisibilityAction({
+      hidden: false,
+      userIntent: "play",
+      sessionIsPlaying: false,
+      autoPausedForVisibility: true,
+    });
+    expect(action).toBe("resume");
+  });
+
+  it("no-op when tab becomes visible but we didn't auto-pause", () => {
+    // E.g. user paused manually while hidden, or tab was never hidden
+    const action = decideVisibilityAction({
+      hidden: false,
+      userIntent: "pause",
+      sessionIsPlaying: false,
+      autoPausedForVisibility: false,
+    });
+    expect(action).toBe("noop");
+  });
+
+  it("no-op when tab becomes visible and is already playing (rare)", () => {
+    const action = decideVisibilityAction({
+      hidden: false,
+      userIntent: "play",
+      sessionIsPlaying: true,
+      autoPausedForVisibility: false,
+    });
+    expect(action).toBe("noop");
+  });
+
+  it("respects user pause during hidden state (no auto-resume on return)", () => {
+    // Scenario: play → hide (auto-pause) → user explicitly pauses while
+    // hidden (userIntent="pause", autoPausedForVisibility cleared by
+    // pause()) → tab returns. Should NOT auto-resume.
+    const action = decideVisibilityAction({
+      hidden: false,
+      userIntent: "pause",
+      sessionIsPlaying: false,
+      autoPausedForVisibility: false,
+    });
+    expect(action).toBe("noop");
   });
 });
 
