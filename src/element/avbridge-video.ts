@@ -24,6 +24,7 @@ import type {
   AudioTrackInfo,
   SubtitleTrackInfo,
   DiagnosticsSnapshot,
+  AvbridgeVideoElementEventMap,
 } from "../types.js";
 
 /** Strategy preference passed via the `preferstrategy` attribute. */
@@ -145,7 +146,13 @@ export class AvbridgeVideoElement extends HTMLElementCtor {
   private _strategy: StrategyName | null = null;
   private _strategyClass: StrategyClass | null = null;
   private _audioTracks: AudioTrackInfo[] = [];
+  /** Subtitle tracks reported by the active UnifiedPlayer (options.subtitles
+   *  + embedded container tracks + programmatic addSubtitle calls). */
   private _subtitleTracks: SubtitleTrackInfo[] = [];
+  /** Subtitle tracks derived from light-DOM `<track>` children. Maintained
+   *  by _syncTextTracks on every mutation. Merged into the public
+   *  `subtitleTracks` getter so the player's settings menu sees them. */
+  private _htmlTrackInfo: SubtitleTrackInfo[] = [];
 
   /**
    * External subtitle list forwarded to `createPlayer()` on the next
@@ -306,13 +313,33 @@ export class AvbridgeVideoElement extends HTMLElementCtor {
     // Remove existing shadow tracks.
     const existing = this._videoEl.querySelectorAll("track");
     for (const t of Array.from(existing)) t.remove();
-    // Clone every <track> light-DOM child into the shadow video.
+    // Clone every <track> light-DOM child into the shadow video, and
+    // rebuild the HTML-derived subtitle info list so the `<avbridge-player>`
+    // settings menu can render them alongside options-sourced tracks.
+    // HTML tracks are assigned high, stable IDs (10000+index) to avoid
+    // colliding with container-embedded ids (typically < 32).
+    this._htmlTrackInfo = [];
+    let htmlIdx = 0;
     for (const child of Array.from(this.children)) {
       if (child.tagName === "TRACK") {
-        const clone = child.cloneNode(true) as HTMLTrackElement;
+        const track = child as HTMLTrackElement;
+        const clone = track.cloneNode(true) as HTMLTrackElement;
         this._videoEl.appendChild(clone);
+        const src = track.getAttribute("src") ?? undefined;
+        const format = src?.toLowerCase().endsWith(".srt") ? "srt" : "vtt";
+        this._htmlTrackInfo.push({
+          id: 10000 + htmlIdx,
+          format,
+          language: track.srclang || track.getAttribute("label") || undefined,
+          sidecarUrl: src,
+        });
+        htmlIdx++;
       }
     }
+    this._dispatch("trackschange", {
+      audioTracks: this._audioTracks,
+      subtitleTracks: this.subtitleTracks,
+    });
   }
 
   /** Internal src setter — separate from the property setter so the
@@ -715,7 +742,13 @@ export class AvbridgeVideoElement extends HTMLElementCtor {
   }
 
   get subtitleTracks(): SubtitleTrackInfo[] {
-    return this._subtitleTracks;
+    // Merge player-sourced tracks with light-DOM `<track>` children.
+    // Both sources coexist: options.subtitles + embedded-in-container
+    // tracks contribute to _subtitleTracks; HTML `<track>` children
+    // contribute _htmlTrackInfo with ids in the 10000+ range.
+    return this._htmlTrackInfo.length === 0
+      ? this._subtitleTracks
+      : [...this._subtitleTracks, ...this._htmlTrackInfo];
   }
 
   /**
@@ -815,6 +848,56 @@ export class AvbridgeVideoElement extends HTMLElementCtor {
 
   getDiagnostics(): DiagnosticsSnapshot | null {
     return this._player?.getDiagnostics() ?? null;
+  }
+
+  // ── Typed addEventListener / removeEventListener overloads ────────────
+  // Consumers using avbridge-specific events get a typed CustomEvent
+  // payload; standard HTMLMediaElement events retain their native types.
+
+  override addEventListener<K extends keyof AvbridgeVideoElementEventMap>(
+    type: K,
+    listener: (this: AvbridgeVideoElement, ev: AvbridgeVideoElementEventMap[K]) => unknown,
+    options?: boolean | AddEventListenerOptions,
+  ): void;
+  override addEventListener<K extends keyof HTMLElementEventMap>(
+    type: K,
+    listener: (this: AvbridgeVideoElement, ev: HTMLElementEventMap[K]) => unknown,
+    options?: boolean | AddEventListenerOptions,
+  ): void;
+  override addEventListener(
+    type: string,
+    listener: EventListenerOrEventListenerObject,
+    options?: boolean | AddEventListenerOptions,
+  ): void;
+  override addEventListener(
+    type: string,
+    listener: EventListenerOrEventListenerObject,
+    options?: boolean | AddEventListenerOptions,
+  ): void {
+    super.addEventListener(type, listener, options);
+  }
+
+  override removeEventListener<K extends keyof AvbridgeVideoElementEventMap>(
+    type: K,
+    listener: (this: AvbridgeVideoElement, ev: AvbridgeVideoElementEventMap[K]) => unknown,
+    options?: boolean | EventListenerOptions,
+  ): void;
+  override removeEventListener<K extends keyof HTMLElementEventMap>(
+    type: K,
+    listener: (this: AvbridgeVideoElement, ev: HTMLElementEventMap[K]) => unknown,
+    options?: boolean | EventListenerOptions,
+  ): void;
+  override removeEventListener(
+    type: string,
+    listener: EventListenerOrEventListenerObject,
+    options?: boolean | EventListenerOptions,
+  ): void;
+  override removeEventListener(
+    type: string,
+    listener: EventListenerOrEventListenerObject,
+    options?: boolean | EventListenerOptions,
+  ): void {
+    super.removeEventListener(type, listener, options);
   }
 
   // ── Event helpers ──────────────────────────────────────────────────────

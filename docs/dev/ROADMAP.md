@@ -1,6 +1,6 @@
 # avbridge.js — Roadmap
 
-Current released version: **v2.5.0** (2026-04-14)
+Current released version: **v2.6.0** (2026-04-14)
 
 ## Positioning
 
@@ -173,27 +173,41 @@ Released 2026-04-14. The "if we can play it, we can convert it" release.
   libav pump/timestamp utilities. hybrid/fallback/remux migrated off
   their duplicated copies (-397 lines).
 
+### v2.6.0 — `<avbridge-player>` polish
+
+Released 2026-04-14. Consumer ergonomics upgrade.
+
+- **Typed event overloads** remove the `as unknown as CustomEvent` cast
+  tax across both `<avbridge-video>` and `<avbridge-player>`. Native
+  HTMLMediaElement events retain their built-in typing.
+- **Drag-and-drop file input** on `<avbridge-player>` with visual
+  dashed-border feedback.
+- **`<track>` children parsing** — light-DOM `<track src srclang>`
+  children now appear in the player's subtitle settings menu (they were
+  already cloned into the shadow `<video>` for native/remux).
+- **HTMLMediaElement parity** — `readyState` and `seekable` now return
+  truthful values on canvas strategies. `buffered` + `networkState`
+  still deferred.
+
 ---
 
 ## Near term — ergonomics + confidence
 
 Priorities ordered by adoption value, per the project plan.
 
-### `<avbridge-player>` polish (next)
+### Remaining `<avbridge-player>` gaps
 
-The player surface should feel as `<video>`-like as possible so
-integrators can drop it in with minimal wrapper work:
+Shipped in v2.6.0: typed event overloads, drag-and-drop, `<track>`
+children, `readyState` + `seekable` for canvas strategies. Still TODO:
 
-- **Typed `addEventListener` overloads** — remove the
-  `as unknown as CustomEvent` cast tax from consumers.
-- **Drag-and-drop file input** on the player area.
-- **Subtitle `<track>` children** parsing — `<track src>` inside
-  `<avbridge-player>` should be picked up alongside `options.subtitles`.
-- **PiP access** — wire the browser's native Picture-in-Picture API
-  when the underlying strategy's element supports it.
-- **HTMLMediaElement parity** gaps per the native-surface work:
-  `buffered`, `seekable`, `readyState`, `networkState` returning
-  something truthful for canvas strategies.
+- **`buffered` on canvas strategies** — synthesize from decoder-position
+  → media-time. Medium cost; tracked separately.
+- **`networkState`** — needs a transport state machine spanning probe →
+  libav reader → decoder. Out-of-scope until a real use case arrives.
+- **PiP passthrough** — wire the browser's native Picture-in-Picture API
+  when the underlying strategy's element supports it (native/remux
+  trivially; canvas strategies would need OffscreenCanvas or a captured
+  MediaStream).
 
 ### Cross-browser testing
 

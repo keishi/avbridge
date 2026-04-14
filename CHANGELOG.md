@@ -4,6 +4,47 @@ All notable changes to **avbridge.js** are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.6.0]
+
+`<avbridge-player>` polish release. Four targeted ergonomics upgrades.
+
+### Added
+
+- **Typed `addEventListener` / `removeEventListener` overloads** on both
+  `<avbridge-video>` and `<avbridge-player>`. Consumers using avbridge
+  custom events (`ready`, `strategychange`, `trackschange`, `timeupdate`,
+  `error`, etc.) now receive a typed `CustomEvent<Detail>` without the
+  `as unknown as CustomEvent` cast tax. Standard HTMLMediaElement events
+  (`play`, `pause`, `seeking`, etc.) retain their native typing via
+  `HTMLElementEventMap`. New type: `AvbridgeVideoElementEventMap`.
+- **Drag-and-drop file input** on `<avbridge-player>`. Drop a video file
+  onto the player and it loads + plays, matching the demo's file-picker
+  flow. Visual dashed-border feedback during dragover (stylable via
+  `.avp-dragover`).
+- **`<track>` children parsing.** Light-DOM `<track src="subs.vtt"
+  srclang="en">` children declared inside `<avbridge-player>` or
+  `<avbridge-video>` were already cloned into the shadow `<video>` for
+  native/remux strategies; they now also populate the subtitle list that
+  the player's settings menu renders. HTML-declared tracks get stable
+  IDs in the 10000+ range to avoid colliding with container-embedded
+  IDs. MutationObserver-driven — add or remove a `<track>` at any time
+  and the menu updates.
+- **HTMLMediaElement parity — `readyState` and `seekable`** on canvas
+  strategies. Previously the inner `<video>` (with no `src`) returned
+  `readyState: 0` and empty `seekable` ranges for hybrid/fallback.
+  Now synthesized: `readyState` reflects frame+audio readiness,
+  `seekable` spans `[0, duration]` once probe completes. `buffered`
+  and `networkState` remain deferred — both need meaningful transport
+  state machinery.
+
+### Deprecated / Deferred
+
+- `buffered` on canvas strategies still returns empty TimeRanges. Requires
+  decoder-position → media-time plumbing; tracked for a follow-up.
+- `networkState` not yet exposed on the element. Needs a transport
+  state machine spanning probe → libav reader → decoder; out of scope
+  for this release.
+
 ## [2.5.0]
 
 The "legacy transcode breadth" release. avbridge.js can now transcode

@@ -3,6 +3,7 @@ import { VideoRenderer } from "./video-renderer.js";
 import { AudioOutput } from "./audio-output.js";
 import { startDecoder, type DecoderHandles } from "./decoder.js";
 import { dbg } from "../../util/debug.js";
+import { makeTimeRanges } from "../../util/time-ranges.js";
 
 /**
  * Fallback strategy session.
@@ -127,6 +128,30 @@ export async function createFallbackSession(
       get: () => ctx.duration ?? NaN,
     });
   }
+  // Synthesize HTMLMediaElement parity surfaces that the canvas strategies
+  // can't otherwise answer truthfully (the inner <video> has no src, so
+  // its own readyState/seekable are zero/empty).
+  //
+  // readyState: HAVE_NOTHING (0) until the first frame lands; then
+  // HAVE_CURRENT_DATA (2) once the cold-start gate is released (both
+  // audio+video ready). Simplified from the full five-level spec — we
+  // don't distinguish HAVE_FUTURE_DATA vs HAVE_ENOUGH_DATA since our
+  // pump semantics make those essentially the same state.
+  Object.defineProperty(target, "readyState", {
+    configurable: true,
+    get: (): number => {
+      if (!renderer.hasFrames()) return 0; // HAVE_NOTHING
+      if (!audio.isPlaying() && audio.bufferAhead() <= 0 && !audio.isNoAudio()) return 1; // HAVE_METADATA
+      return 2; // HAVE_CURRENT_DATA (or better — but 2 is the honest lower bound)
+    },
+  });
+  // seekable: a progressive source is fully seekable once we have duration.
+  Object.defineProperty(target, "seekable", {
+    configurable: true,
+    get: () => makeTimeRanges(ctx.duration && Number.isFinite(ctx.duration) && ctx.duration > 0
+      ? [[0, ctx.duration]]
+      : []),
+  });
 
   /**
    * Wait until the decoder has produced enough buffered output to start
@@ -294,6 +319,8 @@ export async function createFallbackSession(
         delete (target as unknown as Record<string, unknown>).paused;
         delete (target as unknown as Record<string, unknown>).volume;
         delete (target as unknown as Record<string, unknown>).muted;
+        delete (target as unknown as Record<string, unknown>).readyState;
+        delete (target as unknown as Record<string, unknown>).seekable;
       } catch { /* ignore */ }
     },
 

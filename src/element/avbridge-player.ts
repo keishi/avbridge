@@ -23,6 +23,7 @@ import {
   ICON_FULLSCREEN, ICON_FULLSCREEN_EXIT,
   ICON_REPLAY_10, ICON_FORWARD_10,
 } from "./player-icons.js";
+import type { AvbridgeVideoElementEventMap } from "../types.js";
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 
@@ -290,6 +291,38 @@ export class AvbridgePlayerElement extends HTMLElement {
     on(container, "pointerdown", (e) => this._onPointerDown(e as PointerEvent));
     on(container, "pointerup", (e) => this._onPointerUp(e as PointerEvent));
     on(container, "pointercancel", () => this._cancelHold());
+
+    // Drag-and-drop file input. Drop a video file onto the player area
+    // and it loads + plays. Files of non-video types are rejected silently
+    // (no MIME sniffing — we let probe() decide). The dragover listener
+    // calls preventDefault so the drop event actually fires.
+    on(container, "dragenter", (e) => {
+      e.preventDefault();
+      const dt = (e as DragEvent).dataTransfer;
+      if (!dt || !Array.from(dt.types).includes("Files")) return;
+      (container as HTMLElement).classList.add("avp-dragover");
+    });
+    on(container, "dragover", (e) => {
+      e.preventDefault();
+      const dt = (e as DragEvent).dataTransfer;
+      if (dt) dt.dropEffect = "copy";
+    });
+    on(container, "dragleave", (e) => {
+      // dragleave fires on every child — only clear when we leave the container.
+      if ((e as DragEvent).target === container) {
+        (container as HTMLElement).classList.remove("avp-dragover");
+      }
+    });
+    on(container, "drop", (e) => {
+      e.preventDefault();
+      (container as HTMLElement).classList.remove("avp-dragover");
+      const file = (e as DragEvent).dataTransfer?.files?.[0];
+      if (!file) return;
+      // Reuse the existing source-assignment path. play() errors are
+      // reported via the normal error event; don't swallow here.
+      (this._video as unknown as { source: unknown }).source = file;
+      void this._video.play().catch(() => { /* error event already fired */ });
+    });
 
     // Keyboard
     on(this, "keydown", (e) => this._onKeydown(e as KeyboardEvent));
@@ -858,4 +891,55 @@ export class AvbridgePlayerElement extends HTMLElement {
   async setSubtitleTrack(id: number | null): Promise<void> { return this._video.setSubtitleTrack(id); }
   getDiagnostics(): unknown { return this._video.getDiagnostics(); }
   canPlayType(mime: string): string { return this._video.canPlayType(mime); }
+
+  // ── Typed addEventListener / removeEventListener overloads ────────────
+  // Forwarded events from the inner <avbridge-video> preserve their
+  // typed CustomEvent detail. Standard HTMLMediaElement events retain
+  // their native typing via HTMLElementEventMap.
+
+  override addEventListener<K extends keyof AvbridgeVideoElementEventMap>(
+    type: K,
+    listener: (this: AvbridgePlayerElement, ev: AvbridgeVideoElementEventMap[K]) => unknown,
+    options?: boolean | AddEventListenerOptions,
+  ): void;
+  override addEventListener<K extends keyof HTMLElementEventMap>(
+    type: K,
+    listener: (this: AvbridgePlayerElement, ev: HTMLElementEventMap[K]) => unknown,
+    options?: boolean | AddEventListenerOptions,
+  ): void;
+  override addEventListener(
+    type: string,
+    listener: EventListenerOrEventListenerObject,
+    options?: boolean | AddEventListenerOptions,
+  ): void;
+  override addEventListener(
+    type: string,
+    listener: EventListenerOrEventListenerObject,
+    options?: boolean | AddEventListenerOptions,
+  ): void {
+    super.addEventListener(type, listener, options);
+  }
+
+  override removeEventListener<K extends keyof AvbridgeVideoElementEventMap>(
+    type: K,
+    listener: (this: AvbridgePlayerElement, ev: AvbridgeVideoElementEventMap[K]) => unknown,
+    options?: boolean | EventListenerOptions,
+  ): void;
+  override removeEventListener<K extends keyof HTMLElementEventMap>(
+    type: K,
+    listener: (this: AvbridgePlayerElement, ev: HTMLElementEventMap[K]) => unknown,
+    options?: boolean | EventListenerOptions,
+  ): void;
+  override removeEventListener(
+    type: string,
+    listener: EventListenerOrEventListenerObject,
+    options?: boolean | EventListenerOptions,
+  ): void;
+  override removeEventListener(
+    type: string,
+    listener: EventListenerOrEventListenerObject,
+    options?: boolean | EventListenerOptions,
+  ): void {
+    super.removeEventListener(type, listener, options);
+  }
 }

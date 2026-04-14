@@ -38,6 +38,18 @@ export const PLAYER_STYLES = /* css */ `
   height: 100%;
 }
 
+/* Drag-and-drop file target highlight. */
+.avp.avp-dragover::after {
+  content: "";
+  position: absolute;
+  inset: 8px;
+  border: 2px dashed rgba(255, 255, 255, 0.75);
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.25);
+  pointer-events: none;
+  z-index: 10;
+}
+
 /* ── Center overlay ───────────────────────────────────────────────────── */
 
 .avp-overlay {

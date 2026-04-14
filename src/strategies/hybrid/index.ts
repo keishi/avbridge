@@ -2,6 +2,7 @@ import type { MediaContext, PlaybackSession, TransportConfig } from "../../types
 import { VideoRenderer } from "../fallback/video-renderer.js";
 import { AudioOutput } from "../fallback/audio-output.js";
 import { startHybridDecoder, type HybridDecoderHandles } from "./decoder.js";
+import { makeTimeRanges } from "../../util/time-ranges.js";
 
 /**
  * Hybrid strategy session.
@@ -83,6 +84,21 @@ export async function createHybridSession(
       get: () => ctx.duration ?? NaN,
     });
   }
+  // HTMLMediaElement parity surfaces — see fallback/index.ts for rationale.
+  Object.defineProperty(target, "readyState", {
+    configurable: true,
+    get: (): number => {
+      if (!renderer.hasFrames()) return 0;
+      if (!audio.isPlaying() && audio.bufferAhead() <= 0 && !audio.isNoAudio()) return 1;
+      return 2;
+    },
+  });
+  Object.defineProperty(target, "seekable", {
+    configurable: true,
+    get: () => makeTimeRanges(ctx.duration && Number.isFinite(ctx.duration) && ctx.duration > 0
+      ? [[0, ctx.duration]]
+      : []),
+  });
 
   async function waitForBuffer(): Promise<void> {
     const start = performance.now();
@@ -178,6 +194,8 @@ export async function createHybridSession(
         delete (target as unknown as Record<string, unknown>).paused;
         delete (target as unknown as Record<string, unknown>).volume;
         delete (target as unknown as Record<string, unknown>).muted;
+        delete (target as unknown as Record<string, unknown>).readyState;
+        delete (target as unknown as Record<string, unknown>).seekable;
       } catch { /* ignore */ }
     },
 

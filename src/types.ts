@@ -312,6 +312,38 @@ export type PlayerEventName = keyof PlayerEventMap;
 /** Generic listener type re-exported for player.on overloads. */
 export type Listener<T> = (payload: T) => void;
 
+/**
+ * CustomEvents dispatched by `<avbridge-video>` and `<avbridge-player>`.
+ * Map each event name to the full `CustomEvent<Detail>` so addEventListener
+ * overloads can type the listener parameter correctly.
+ *
+ * Standard HTMLMediaElement events (play, pause, seeking, volumechange,
+ * etc.) are forwarded from the inner `<video>` as plain `Event`s and remain
+ * typed via the built-in `HTMLElementEventMap`. They are NOT in this map —
+ * TypeScript will pick up their native types automatically.
+ */
+export interface AvbridgeVideoElementEventMap {
+  strategychange: CustomEvent<{
+    strategy: StrategyName;
+    strategyClass: string | null;
+    reason: string;
+    from?: StrategyName;
+    currentTime?: number;
+    diagnostics: DiagnosticsSnapshot;
+  }>;
+  trackschange: CustomEvent<{
+    audioTracks: AudioTrackInfo[];
+    subtitleTracks: SubtitleTrackInfo[];
+  }>;
+  timeupdate: CustomEvent<{ currentTime: number }>;
+  ended: CustomEvent<Record<string, never>>;
+  ready: CustomEvent<{ diagnostics: DiagnosticsSnapshot }>;
+  destroy: CustomEvent<Record<string, never>>;
+  error: CustomEvent<{ error: Error; diagnostics: DiagnosticsSnapshot | null }>;
+  progress: CustomEvent<{ buffered: TimeRanges }>;
+  loadstart: CustomEvent<Record<string, never>>;
+}
+
 // ── Conversion types ────────────────────────────────────────────────────
 
 /** Target output format for conversion functions. */
