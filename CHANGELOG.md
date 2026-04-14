@@ -4,20 +4,25 @@ All notable changes to **avbridge.js** are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [2.5.0]
+
+The "legacy transcode breadth" release. avbridge.js can now transcode
+from legacy containers (AVI, ASF, FLV, RealMedia) to any modern output
+container (MP4, WebM, MKV) in a single one-pass pipeline. Reinforces
+the engine-first positioning: if avbridge can *play* it, avbridge can
+now generally *convert* it too.
 
 ### Added
 
-- **rm/rmvb transcode input.** The AVI/ASF/FLV libav-demux transcode
-  pipeline now also handles RealMedia. Video codecs WebCodecs doesn't
-  support (rv10/20/30/40) go through a libav software video decoder
-  whose decoded frames are bridged to `VideoFrame` via
-  `laFrameToVideoFrame` — same downstream queue+drain → mediabunny
-  encode+mux. Audio codecs (cook, ra_144/288, sipr, atrac3) already
-  decode via libav in the Phase 1 audio path.
+- **rm/rmvb transcode input.** The legacy-container transcode pipeline
+  now handles RealMedia. Video codecs WebCodecs doesn't support
+  (rv10/20/30/40) go through a libav software video decoder whose
+  decoded frames are bridged to `VideoFrame` via `laFrameToVideoFrame` —
+  same downstream queue+drain → mediabunny encode+mux. Audio codecs
+  (cook, ra_144/288, sipr, atrac3) already decode via libav.
 - **WebM and MKV output from legacy containers.** The libav-demux
-  transcode path previously only emitted MP4. Now any supported output
-  format (mp4, webm, mkv) works. Default codecs adapt per output:
+  transcode path previously only emitted MP4. Any supported output
+  format (mp4, webm, mkv) now works. Default codecs adapt per output:
   mp4/mkv → h264/aac, webm → vp9/opus. The existing
   `validateCodecCompatibility` gate (in `transcode()`) still catches
   nonsense combos like webm + h264.
@@ -35,6 +40,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `src/util/libav-demux.ts`. No behavioral change; bundle sizes
   decreased slightly as a side effect (duplicates weren't tree-shaking
   across strategy boundaries).
+
+### Known caveats (out of scope for this release)
+
+- **10-bit video transcode** — source 10-bit video throws with a
+  clear error. Needs pixel-format conversion before encode.
+- **Streaming output** (`outputStream`) is not yet supported for the
+  libav-backed transcode path. Output goes through an in-memory
+  `BufferTarget`. Large files are limited by available memory.
+- **Multi-track output** remains deferred — extra input tracks are
+  silently dropped.
 
 ## [2.4.0]
 

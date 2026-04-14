@@ -1,17 +1,29 @@
 # avbridge.js — Roadmap
 
-Current released version: **v2.4.0** (2026-04-14)
+Current released version: **v2.5.0** (2026-04-14)
+
+## Positioning
+
+**avbridge.js is a browser media compatibility engine** — VLC-style
+playback for the browser, with conversion as a second pillar. Not an
+editor, not a streaming platform, not a post-production suite.
+
+The shape of the project:
+
+> **Engine first. Player/product second. Advanced enrichment later.**
 
 ## Project philosophy
 
-avbridge focuses on:
-- Playing arbitrary media files in the browser
-- Preferring native playback, falling back gracefully through
-  remux → hybrid → software decode
-- Minimal configuration — zero-config for bundler consumers,
-  one global for script-tag consumers
-- Correctness over features — every strategy must produce
-  correct A/V output before gaining new capabilities
+- Play arbitrary local or remote media in the browser, including
+  legacy containers and codecs not just modern web-native ones.
+- Prefer **native → remux → hybrid → fallback** — remux when possible,
+  decode only when necessary.
+- Transcode awkward legacy formats into modern formats, one pass.
+- Expose a thin web-component surface; the engine stays the real core.
+- Minimal configuration — zero-config for bundler consumers, one
+  global for script-tag consumers.
+- Correctness over features — every strategy must produce correct
+  A/V output before gaining new capabilities.
 
 ---
 
@@ -143,50 +155,92 @@ Released 2026-04-14.
   libav-demux-backed transcode pipeline (`src/convert/transcode-libav.ts`)
   using shared helper at `src/util/libav-demux.ts`. Single video +
   single audio track, MP4 output only, 8-bit video. Extra tracks
-  silently dropped. Phase 2 (WebM output, multi-track, rm/rmvb input,
-  10-bit, streaming output) deferred.
+  silently dropped.
+
+### v2.5.0 — Legacy transcode breadth
+
+Released 2026-04-14. The "if we can play it, we can convert it" release.
+
+- **rm/rmvb transcode input.** libav software video decode (rv10/20/30/40)
+  + libav audio decode (cook, ra_288, sipr, atrac3) → bridge to
+  WebCodecs VideoFrame → mediabunny encode+mux. Detection is dynamic:
+  `VideoDecoder.isConfigSupported()` gate falls through to software
+  decode automatically, so future browsers adding rv40 support would
+  silently take the faster path.
+- **WebM and MKV output from legacy containers.** All combinations of
+  {avi, asf, flv, rm/rmvb} input × {mp4, webm, mkv} output.
+- **Shared `libav-demux.ts` helper** now the single source of truth for
+  libav pump/timestamp utilities. hybrid/fallback/remux migrated off
+  their duplicated copies (-397 lines).
 
 ---
 
-## v2.5.x — Breadth
+## Near term — ergonomics + confidence
 
-Ordered by likely user pain, not implementation difficulty.
+Priorities ordered by adoption value, per the project plan.
 
-### Transcode path Phase 2
+### `<avbridge-player>` polish (next)
 
-- **WebM output from AVI/ASF/FLV** (VP9/Opus encode path).
-- **Multi-track output** in the libav transcode path. Depends on the
-  bigger multi-track-output roadmap item.
-- **rm/rmvb transcode input** once codec coverage through WebCodecs is
-  verified (rv40 in particular).
-- **10-bit video transcode**. Needs pixel-format conversion before
-  feeding `VideoSample`.
+The player surface should feel as `<video>`-like as possible so
+integrators can drop it in with minimal wrapper work:
+
+- **Typed `addEventListener` overloads** — remove the
+  `as unknown as CustomEvent` cast tax from consumers.
+- **Drag-and-drop file input** on the player area.
+- **Subtitle `<track>` children** parsing — `<track src>` inside
+  `<avbridge-player>` should be picked up alongside `options.subtitles`.
+- **PiP access** — wire the browser's native Picture-in-Picture API
+  when the underlying strategy's element supports it.
+- **HTMLMediaElement parity** gaps per the native-surface work:
+  `buffered`, `seekable`, `readyState`, `networkState` returning
+  something truthful for canvas strategies.
+
+### Cross-browser testing
+
+Add a Playwright-based matrix covering Chromium, Firefox, and WebKit.
+Test first:
+
+- Native MP4, remux MKV, custom element lifecycle.
+- Play/pause/seek/mute/volume parity across strategies.
+- Strategy-choice-per-browser (e.g. HEVC via native on Safari, remux
+  elsewhere).
+
+Then capability-gate: hybrid, fallback, transcode, PiP.
+
+Goal isn't "every browser supports everything" — it's
+**avbridge chooses the correct strategy and degrades correctly on
+each browser**.
+
+### Dogfood in the explorer
+
+Real-app validation via the explorer's `z-video-player`. Guides what's
+missing from `<avbridge-video>`/`<avbridge-player>` for drop-in use.
+
+---
+
+## Medium term — polish + breadth
+
+### Transcode Phase 3
+
+- **10-bit video transcode** — pixel-format conversion before encode.
+  Adds real complexity; defer until explicitly demanded.
 - **Streaming output** (`StreamTarget`) from the libav transcode path —
   currently only supported in the mediabunny Conversion path.
-- **Migrate hybrid/fallback/remux to `libav-demux.ts`** (mechanical
-  follow-up deferred from v2.4 Phase 1).
-
-### `<avbridge-player>` polish
-
-- **Typed `addEventListener` overloads** so consumers don't need
-  `as unknown as CustomEvent` casts.
-- **Drag-and-drop file input** on the player area.
-- **Subtitle `<track>` children** parsing (currently only supports
-  `options.subtitles`).
+- **Multi-track output** — depends on the multi-track roadmap item
+  below; no user has asked yet.
 
 ### Buffered ranges for canvas strategies
 
 `<avbridge-video>.buffered` returns empty TimeRanges for hybrid and
-fallback. Synthesizing ranges from the decoder's read position
-would give consumers meaningful buffer state (and the seek bar's
-"buffered" indicator would actually fill). UX, not correctness.
+fallback. Synthesizing ranges from the decoder's read position would
+give consumers meaningful buffer state (and the seek bar's "buffered"
+indicator would actually fill). UX, not correctness.
 
 ### Subtitle timeline panel
 
 A separate `<avbridge-subtitles>` or similar element showing subtitle
 cues as a scrollable list with timestamps — click a cue to jump to
-that point. Like YouTube's transcript panel. Needs access to the
-subtitle track cues via the player's text track.
+that point.
 
 ---
 
