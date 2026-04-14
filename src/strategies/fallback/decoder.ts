@@ -29,6 +29,10 @@ import { AudioOutput } from "./audio-output.js";
 import type { MediaContext } from "../../types.js";
 import { pickLibavVariant } from "./variant-routing.js";
 import { dbg } from "../../util/debug.js";
+import {
+  sanitizeFrameTimestamp,
+  libavFrameToInterleavedFloat32,
+} from "../../util/libav-demux.js";
 
 export interface DecoderHandles {
   destroy(): Promise<void>;
@@ -391,7 +395,7 @@ export async function startDecoder(opts: StartDecoderOptions): Promise<DecoderHa
 
     for (const f of frames) {
       if (myToken !== pumpToken || destroyed) return;
-      const bridgeOpts = sanitizeFrameTimestamp(
+      sanitizeFrameTimestamp(
         f,
         () => {
           const ts = syntheticVideoUs;
@@ -400,8 +404,10 @@ export async function startDecoder(opts: StartDecoderOptions): Promise<DecoderHa
         },
         videoTimeBase,
       );
+      // sanitizeFrameTimestamp normalizes pts to µs, so the bridge can
+      // always use the 1/1e6 timebase.
       try {
-        const vf = bridge.laFrameToVideoFrame(f, bridgeOpts);
+        const vf = bridge.laFrameToVideoFrame(f, { timeBase: [1, 1_000_000] });
         opts.renderer.enqueue(vf);
         videoFramesDecoded++;
       } catch (err) {
@@ -622,180 +628,6 @@ export async function startDecoder(opts: StartDecoderOptions): Promise<DecoderHa
       };
     },
   };
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Frame timestamp sanitizer.
-//
-// TODO(libav-demux-migration): sanitizePacketTimestamp / sanitizeFrameTimestamp
-// / libavFrameToInterleavedFloat32 are now in src/util/libav-demux.ts. Migrate
-// when touching the pump for other reasons; see transcode-libav.ts.
-//
-// libav can hand back decoded frames with `pts = AV_NOPTS_VALUE` (encoded as
-// ptshi = -2147483648, pts = 0) for inputs whose demuxer can't determine
-// presentation times. AVI is the canonical example. The bridge's
-// `laFrameToVideoFrame` then multiplies pts × 1e6 × tbNum / tbDen and
-// overflows int64, throwing "Value is outside the 'long long' value range".
-//
-// Fix: replace any invalid pts with a synthetic microsecond counter, force
-// the frame's pts/ptshi to that value, and tell the bridge to use a 1/1e6
-// timebase so it does an identity conversion.
-// ─────────────────────────────────────────────────────────────────────────────
-
-interface BridgeOpts {
-  timeBase?: [number, number];
-  transfer?: boolean;
-}
-
-function sanitizeFrameTimestamp(
-  frame: LibavFrame,
-  nextUs: () => number,
-  fallbackTimeBase?: [number, number],
-): BridgeOpts {
-  const lo = frame.pts ?? 0;
-  const hi = frame.ptshi ?? 0;
-  const isInvalid = (hi === -2147483648 && lo === 0) || !Number.isFinite(lo);
-  if (isInvalid) {
-    const us = nextUs();
-    frame.pts = us;
-    frame.ptshi = 0;
-    return { timeBase: [1, 1_000_000] };
-  }
-  const tb = fallbackTimeBase ?? [1, 1_000_000];
-  const pts64 = hi * 0x100000000 + lo;
-  const us = Math.round((pts64 * 1_000_000 * tb[0]) / tb[1]);
-  if (Number.isFinite(us) && Math.abs(us) <= Number.MAX_SAFE_INTEGER) {
-    frame.pts = us;
-    frame.ptshi = us < 0 ? -1 : 0;
-    return { timeBase: [1, 1_000_000] };
-  }
-  const fallback = nextUs();
-  frame.pts = fallback;
-  frame.ptshi = 0;
-  return { timeBase: [1, 1_000_000] };
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// libav decoded `Frame` → interleaved Float32Array (the format AudioOutput
-// schedules).
-// ─────────────────────────────────────────────────────────────────────────────
-
-const AV_SAMPLE_FMT_U8 = 0;
-const AV_SAMPLE_FMT_S16 = 1;
-const AV_SAMPLE_FMT_S32 = 2;
-const AV_SAMPLE_FMT_FLT = 3;
-const AV_SAMPLE_FMT_U8P = 5;
-const AV_SAMPLE_FMT_S16P = 6;
-const AV_SAMPLE_FMT_S32P = 7;
-const AV_SAMPLE_FMT_FLTP = 8;
-
-interface InterleavedSamples {
-  data: Float32Array;
-  channels: number;
-  sampleRate: number;
-}
-
-function libavFrameToInterleavedFloat32(frame: LibavFrame): InterleavedSamples | null {
-  const channels = frame.channels ?? frame.ch_layout_nb_channels ?? 1;
-  const sampleRate = frame.sample_rate ?? 44100;
-  const nbSamples = frame.nb_samples ?? 0;
-  if (nbSamples === 0) return null;
-
-  const out = new Float32Array(nbSamples * channels);
-
-  switch (frame.format) {
-    case AV_SAMPLE_FMT_FLTP: {
-      const planes = ensurePlanes(frame.data, channels);
-      for (let ch = 0; ch < channels; ch++) {
-        const plane = asFloat32(planes[ch]);
-        for (let i = 0; i < nbSamples; i++) out[i * channels + ch] = plane[i];
-      }
-      return { data: out, channels, sampleRate };
-    }
-    case AV_SAMPLE_FMT_FLT: {
-      const flat = asFloat32(frame.data);
-      for (let i = 0; i < nbSamples * channels; i++) out[i] = flat[i];
-      return { data: out, channels, sampleRate };
-    }
-    case AV_SAMPLE_FMT_S16P: {
-      const planes = ensurePlanes(frame.data, channels);
-      for (let ch = 0; ch < channels; ch++) {
-        const plane = asInt16(planes[ch]);
-        for (let i = 0; i < nbSamples; i++) out[i * channels + ch] = plane[i] / 32768;
-      }
-      return { data: out, channels, sampleRate };
-    }
-    case AV_SAMPLE_FMT_S16: {
-      const flat = asInt16(frame.data);
-      for (let i = 0; i < nbSamples * channels; i++) out[i] = flat[i] / 32768;
-      return { data: out, channels, sampleRate };
-    }
-    case AV_SAMPLE_FMT_S32P: {
-      const planes = ensurePlanes(frame.data, channels);
-      for (let ch = 0; ch < channels; ch++) {
-        const plane = asInt32(planes[ch]);
-        for (let i = 0; i < nbSamples; i++) out[i * channels + ch] = plane[i] / 2147483648;
-      }
-      return { data: out, channels, sampleRate };
-    }
-    case AV_SAMPLE_FMT_S32: {
-      const flat = asInt32(frame.data);
-      for (let i = 0; i < nbSamples * channels; i++) out[i] = flat[i] / 2147483648;
-      return { data: out, channels, sampleRate };
-    }
-    case AV_SAMPLE_FMT_U8P: {
-      const planes = ensurePlanes(frame.data, channels);
-      for (let ch = 0; ch < channels; ch++) {
-        const plane = asUint8(planes[ch]);
-        for (let i = 0; i < nbSamples; i++) out[i * channels + ch] = (plane[i] - 128) / 128;
-      }
-      return { data: out, channels, sampleRate };
-    }
-    case AV_SAMPLE_FMT_U8: {
-      const flat = asUint8(frame.data);
-      for (let i = 0; i < nbSamples * channels; i++) out[i] = (flat[i] - 128) / 128;
-      return { data: out, channels, sampleRate };
-    }
-    default:
-      if (!(globalThis as { __avbridgeLoggedSampleFmt?: number }).__avbridgeLoggedSampleFmt) {
-        (globalThis as { __avbridgeLoggedSampleFmt?: number }).__avbridgeLoggedSampleFmt = frame.format;
-        console.warn(`[avbridge] unsupported audio sample format from libav: ${frame.format}`);
-      }
-      return null;
-  }
-}
-
-function ensurePlanes(data: unknown, channels: number): unknown[] {
-  if (Array.isArray(data)) return data;
-  const arr = data as { length: number; subarray?: (a: number, b: number) => unknown };
-  const len = arr.length;
-  const perChannel = Math.floor(len / channels);
-  const planes: unknown[] = [];
-  for (let ch = 0; ch < channels; ch++) {
-    planes.push(arr.subarray ? arr.subarray(ch * perChannel, (ch + 1) * perChannel) : arr);
-  }
-  return planes;
-}
-
-function asFloat32(x: unknown): Float32Array {
-  if (x instanceof Float32Array) return x;
-  const ta = x as { buffer: ArrayBuffer; byteOffset: number; byteLength: number };
-  return new Float32Array(ta.buffer, ta.byteOffset, ta.byteLength / 4);
-}
-function asInt16(x: unknown): Int16Array {
-  if (x instanceof Int16Array) return x;
-  const ta = x as { buffer: ArrayBuffer; byteOffset: number; byteLength: number };
-  return new Int16Array(ta.buffer, ta.byteOffset, ta.byteLength / 2);
-}
-function asInt32(x: unknown): Int32Array {
-  if (x instanceof Int32Array) return x;
-  const ta = x as { buffer: ArrayBuffer; byteOffset: number; byteLength: number };
-  return new Int32Array(ta.buffer, ta.byteOffset, ta.byteLength / 4);
-}
-function asUint8(x: unknown): Uint8Array {
-  if (x instanceof Uint8Array) return x;
-  const ta = x as { buffer: ArrayBuffer; byteOffset: number; byteLength: number };
-  return new Uint8Array(ta.buffer, ta.byteOffset, ta.byteLength);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

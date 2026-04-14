@@ -18,6 +18,7 @@ import {
   buildMediabunnySourceFromInput,
 } from "../probe/mediabunny.js";
 import { normalizeSource } from "../util/source.js";
+import { sanitizePacketTimestamp } from "../util/libav-demux.js";
 import { prepareLibavInput, type LibavInputHandle } from "../util/libav-http-reader.js";
 import type {
   MediaInput,
@@ -383,44 +384,6 @@ async function doLibavRemux(
     duration: ctx.duration,
     filename: outputFilename,
   };
-}
-
-// ── Packet timestamp sanitizer (from hybrid/decoder.ts) ─────────────────────
-// TODO(libav-demux-migration): sanitizePacketTimestamp now lives in
-// src/util/libav-demux.ts. Migrate this callsite when next editing the
-// remux pump — see transcode-libav.ts for the consumer pattern.
-
-function sanitizePacketTimestamp(
-  pkt: LibavPacket,
-  nextUs: () => number,
-  fallbackTimeBase?: [number, number],
-): void {
-  const lo = pkt.pts ?? 0;
-  const hi = pkt.ptshi ?? 0;
-  const isInvalid = (hi === -2147483648 && lo === 0) || !Number.isFinite(lo);
-  if (isInvalid) {
-    const us = nextUs();
-    pkt.pts = us;
-    pkt.ptshi = 0;
-    pkt.time_base_num = 1;
-    pkt.time_base_den = 1_000_000;
-    return;
-  }
-  const tb = fallbackTimeBase ?? [1, 1_000_000];
-  const pts64 = hi * 0x100000000 + lo;
-  const us = Math.round((pts64 * 1_000_000 * tb[0]) / tb[1]);
-  if (Number.isFinite(us) && Math.abs(us) <= Number.MAX_SAFE_INTEGER) {
-    pkt.pts = us;
-    pkt.ptshi = us < 0 ? -1 : 0;
-    pkt.time_base_num = 1;
-    pkt.time_base_den = 1_000_000;
-    return;
-  }
-  const fallback = nextUs();
-  pkt.pts = fallback;
-  pkt.ptshi = 0;
-  pkt.time_base_num = 1;
-  pkt.time_base_den = 1_000_000;
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
