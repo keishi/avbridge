@@ -38,7 +38,12 @@ import type {
 
 /** @internal */
 export function isLibavTranscodeContainer(container: string): boolean {
-  return container === "avi" || container === "asf" || container === "flv";
+  return (
+    container === "avi" ||
+    container === "asf" ||
+    container === "flv" ||
+    container === "rm"  // RealMedia (.rm / .rmvb) — rv40/cook via libav software decode
+  );
 }
 
 export async function transcodeViaLibav(
@@ -112,7 +117,15 @@ export async function transcodeViaLibav(
     const bridge = await loadBridge();
 
     // ── Video decoder (WebCodecs) + sample source (mediabunny) ───────
+    // Video decode has two possible paths:
+    // - WebCodecs (hardware or browser's software decoder) — used when
+    //   `VideoDecoder.isConfigSupported(config)` returns true. Fast.
+    // - libav software decode — used when WebCodecs can't handle the codec.
+    //   Required for RealMedia (rv40/etc.), where the source codec isn't in
+    //   any browser. The output is still a VideoFrame (via the bridge's
+    //   laFrameToVideoFrame), so the downstream queue+drain is unchanged.
     let videoDecoder: VideoDecoder | null = null;
+    let videoSoftDec: { c: number; pkt: number; frame: number } | null = null;
     let videoSource: InstanceType<typeof mb.VideoSampleSource> | null = null;
     let videoBsfCtx: number | null = null;
     let videoBsfPkt: number | null = null;
@@ -165,23 +178,8 @@ export async function transcodeViaLibav(
 
     if (demux.videoStream && !options.dropVideo) {
       try {
-        const config = await bridge.videoStreamToConfig(demux.libav, demux.videoStream);
-        if (!config) throw new Error("libavjs-webcodecs-bridge returned null video config");
-
-        const supported = await VideoDecoder.isConfigSupported(config);
-        if (!supported.supported) {
-          throw new AvbridgeError(
-            ERR_CODEC_NOT_SUPPORTED,
-            `WebCodecs does not support decoding video: ${JSON.stringify(config)}`,
-            `This file's video codec isn't available in this browser's WebCodecs implementation. Try a Chromium-based browser, or use remux() + createPlayer() to play without transcoding.`,
-          );
-        }
-
-        videoWidth = (config.codedWidth ?? ctx.videoTracks[0]?.width) ?? 0;
-        videoHeight = (config.codedHeight ?? ctx.videoTracks[0]?.height) ?? 0;
-
-        // Phase 1: refuse 10-bit. The bridge's decoded VideoFrame uses
-        // a 10-bit pixel format that mediabunny's encoders don't accept.
+        // Phase 1: refuse 10-bit. Neither decode path produces pixel
+        // formats that mediabunny's encoders reliably consume.
         const bitDepth = ctx.videoTracks[0]?.bitDepth ?? 8;
         if (bitDepth > 8) {
           throw new AvbridgeError(
@@ -195,21 +193,50 @@ export async function transcodeViaLibav(
           videoTimeBase = [demux.videoStream.time_base_num, demux.videoStream.time_base_den];
         }
 
-        videoDecoder = new VideoDecoder({
-          output: (frame) => {
-            if (frameQueue.length >= MAX_QUEUE) {
-              // Pump-side backpressure should prevent this. Defend anyway.
-              frame.close();
-              return;
-            }
-            frameQueue.push(frame);
-            void drain();
-          },
-          error: (err) => {
-            drainError = err as unknown as Error;
-          },
-        });
-        videoDecoder.configure(config);
+        // Try WebCodecs first. If the bridge can build a config AND the
+        // browser's VideoDecoder supports it, use hardware/native decode.
+        // Otherwise fall back to libav software decode (rv40, etc.).
+        let config: VideoDecoderConfig | null = null;
+        try {
+          config = await bridge.videoStreamToConfig(demux.libav, demux.videoStream);
+        } catch {
+          config = null;
+        }
+        const supported = config
+          ? await VideoDecoder.isConfigSupported(config).catch(() => ({ supported: false }))
+          : { supported: false };
+
+        videoWidth = (config?.codedWidth ?? ctx.videoTracks[0]?.width) ?? 0;
+        videoHeight = (config?.codedHeight ?? ctx.videoTracks[0]?.height) ?? 0;
+
+        if (config && supported.supported) {
+          // ── WebCodecs path ──
+          videoDecoder = new VideoDecoder({
+            output: (frame) => {
+              if (frameQueue.length >= MAX_QUEUE) {
+                frame.close();
+                return;
+              }
+              frameQueue.push(frame);
+              void drain();
+            },
+            error: (err) => {
+              drainError = err as unknown as Error;
+            },
+          });
+          videoDecoder.configure(config);
+        } else {
+          // ── libav software decode path ──
+          // RealMedia (rv10/20/30/40) and any other codec WebCodecs doesn't
+          // support lands here. The libav variant picker already routes
+          // rm/rv* to the "avbridge" variant via codec-set inspection.
+          const libavSoft = demux.libav as unknown as LibavSoftVideo;
+          const [, c, pkt, frame] = await libavSoft.ff_init_decoder(
+            demux.videoStream.codec_id,
+            { codecpar: demux.videoStream.codecpar },
+          );
+          videoSoftDec = { c, pkt, frame };
+        }
 
         videoSource = new mb.VideoSampleSource({
           codec: avbridgeVideoToMediabunny(videoCodec),
@@ -366,46 +393,96 @@ export async function transcodeViaLibav(
     }
 
     // ── Pump ────────────────────────────────────────────────────────
-    await demux.pump({
-      signal: ac,
-      onVideoPackets: videoDecoder
-        ? async (pkts) => {
-            throwIfAborted();
-            throwIfDrainError();
-            // Backpressure: decoder queue AND drain queue.
-            while (
-              !ac?.aborted &&
-              (videoDecoder!.decodeQueueSize > 16 || frameQueue.length >= MAX_QUEUE - 2)
-            ) {
-              await new Promise((r) => setTimeout(r, 10));
-            }
-            throwIfAborted();
+    const onVideoPacketsWebCodecs = videoDecoder
+      ? async (pkts: LibavPacket[]) => {
+          throwIfAborted();
+          throwIfDrainError();
+          while (
+            !ac?.aborted &&
+            (videoDecoder!.decodeQueueSize > 16 || frameQueue.length >= MAX_QUEUE - 2)
+          ) {
+            await new Promise((r) => setTimeout(r, 10));
+          }
+          throwIfAborted();
 
-            const processed = await applyBSF(pkts);
-            const bridgeAny = bridge as unknown as {
-              packetToEncodedVideoChunk(pkt: unknown, stream: unknown): EncodedVideoChunk;
-            };
-            for (const pkt of processed) {
-              sanitizePacketTimestamp(pkt, () => {
-                const ts = syntheticVideoUs;
-                syntheticVideoUs += videoFrameStepUs;
-                return ts;
-              }, videoTimeBase);
-              try {
-                const chunk = bridgeAny.packetToEncodedVideoChunk(pkt, demux.videoStream);
-                videoDecoder!.decode(chunk);
-              } catch (err) {
-                // Fail fast — if the first chunks don't go through, later
-                // ones won't either.
-                throw new AvbridgeError(
-                  ERR_TRANSCODE_DECODE,
-                  `transcode: packet → EncodedVideoChunk failed: ${(err as Error).message}`,
-                  undefined,
-                );
-              }
+          const processed = await applyBSF(pkts);
+          const bridgeAny = bridge as unknown as {
+            packetToEncodedVideoChunk(pkt: unknown, stream: unknown): EncodedVideoChunk;
+          };
+          for (const pkt of processed) {
+            sanitizePacketTimestamp(pkt, () => {
+              const ts = syntheticVideoUs;
+              syntheticVideoUs += videoFrameStepUs;
+              return ts;
+            }, videoTimeBase);
+            try {
+              const chunk = bridgeAny.packetToEncodedVideoChunk(pkt, demux.videoStream);
+              videoDecoder!.decode(chunk);
+            } catch (err) {
+              throw new AvbridgeError(
+                ERR_TRANSCODE_DECODE,
+                `transcode: packet → EncodedVideoChunk failed: ${(err as Error).message}`,
+                undefined,
+              );
             }
           }
-        : undefined,
+        }
+      : undefined;
+
+    const onVideoPacketsSoftware = videoSoftDec
+      ? async (pkts: LibavPacket[]) => {
+          throwIfAborted();
+          throwIfDrainError();
+          // Only frameQueue backpressure — no WebCodecs queue.
+          while (!ac?.aborted && frameQueue.length >= MAX_QUEUE - 2) {
+            await new Promise((r) => setTimeout(r, 10));
+          }
+          throwIfAborted();
+
+          const libavSoft = demux.libav as unknown as LibavSoftVideo;
+          let frames;
+          try {
+            frames = await libavSoft.ff_decode_multi(
+              videoSoftDec!.c, videoSoftDec!.pkt, videoSoftDec!.frame, pkts,
+              { ignoreErrors: true },
+            );
+          } catch (err) {
+            throw new AvbridgeError(
+              ERR_TRANSCODE_DECODE,
+              `transcode: software video decode failed: ${(err as Error).message}`,
+              undefined,
+            );
+          }
+          for (const f of frames) {
+            sanitizeFrameTimestamp(f, () => {
+              const ts = syntheticVideoUs;
+              syntheticVideoUs += videoFrameStepUs;
+              return ts;
+            }, videoTimeBase);
+            try {
+              // Bridge consumes any libav-decoded frame (software or
+              // hardware) and returns a WebCodecs VideoFrame.
+              const vf = bridge.laFrameToVideoFrame(f, { timeBase: [1, 1_000_000] });
+              if (frameQueue.length >= MAX_QUEUE) {
+                vf.close();
+              } else {
+                frameQueue.push(vf);
+                void drain();
+              }
+            } catch (err) {
+              throw new AvbridgeError(
+                ERR_TRANSCODE_DECODE,
+                `transcode: laFrameToVideoFrame failed: ${(err as Error).message}`,
+                undefined,
+              );
+            }
+          }
+        }
+      : undefined;
+
+    await demux.pump({
+      signal: ac,
+      onVideoPackets: onVideoPacketsWebCodecs ?? onVideoPacketsSoftware,
       onAudioPackets: audioDec
         ? async (pkts) => {
             throwIfAborted();
@@ -416,6 +493,29 @@ export async function transcodeViaLibav(
         // Drain video: flush decoder, then wait for our queue to empty.
         if (videoDecoder && videoDecoder.state === "configured") {
           try { await videoDecoder.flush(); } catch { /* ignore */ }
+        }
+        if (videoSoftDec) {
+          // Flush the software decoder with fin: true so any internally
+          // buffered frames come out.
+          const libavSoft = demux.libav as unknown as LibavSoftVideo;
+          try {
+            const tail = await libavSoft.ff_decode_multi(
+              videoSoftDec.c, videoSoftDec.pkt, videoSoftDec.frame, [],
+              { fin: true, ignoreErrors: true },
+            );
+            for (const f of tail) {
+              sanitizeFrameTimestamp(f, () => {
+                const ts = syntheticVideoUs;
+                syntheticVideoUs += videoFrameStepUs;
+                return ts;
+              }, videoTimeBase);
+              try {
+                const vf = bridge.laFrameToVideoFrame(f, { timeBase: [1, 1_000_000] });
+                frameQueue.push(vf);
+                void drain();
+              } catch { /* ignore per-frame failures during flush */ }
+            }
+          } catch { /* ignore */ }
         }
         // A final drain() kick to consume any post-flush frames.
         await drain();
@@ -517,6 +617,9 @@ export async function transcodeViaLibav(
       opts?: { fin?: boolean; ignoreErrors?: boolean },
     ): Promise<import("../util/libav-demux.js").LibavFrame[]>;
   }
+  // Software video decode uses the same surface as audio. Aliased for
+  // readability at callsites.
+  type LibavSoftVideo = LibavAudio;
   interface LibavBsf {
     av_bsf_list_parse_str_js(str: string): Promise<number>;
     AVBSFContext_par_in(ctx: number): Promise<number>;
@@ -541,6 +644,10 @@ async function loadBridge(): Promise<BridgeModule> {
 interface BridgeModule {
   videoStreamToConfig(libav: unknown, stream: unknown): Promise<VideoDecoderConfig | null>;
   packetToEncodedVideoChunk(pkt: unknown, stream: unknown): EncodedVideoChunk;
+  laFrameToVideoFrame(
+    frame: unknown,
+    opts?: { timeBase?: [number, number]; transfer?: boolean },
+  ): VideoFrame;
 }
 
 function avbridgeVideoToMediabunny(c: OutputVideoCodec): "avc" | "hevc" | "vp9" | "av1" {

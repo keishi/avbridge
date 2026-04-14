@@ -95,6 +95,10 @@ describe("isLibavTranscodeContainer", () => {
     expect(isLibavTranscodeContainer("flv")).toBe(true);
   });
 
+  it("matches RealMedia (rm — the probe also uses this for rmvb)", () => {
+    expect(isLibavTranscodeContainer("rm")).toBe(true);
+  });
+
   it("does not match mediabunny-native containers (they take the direct path)", () => {
     expect(isLibavTranscodeContainer("mp4")).toBe(false);
     expect(isLibavTranscodeContainer("mkv")).toBe(false);
@@ -106,8 +110,8 @@ describe("isLibavTranscodeContainer", () => {
     expect(isLibavTranscodeContainer("flac")).toBe(false);
   });
 
-  it("does not (yet) match rm/rmvb — Phase 2 consideration", () => {
-    expect(isLibavTranscodeContainer("rm")).toBe(false);
-    expect(isLibavTranscodeContainer("rmvb")).toBe(false);
+  it("does not match unknown / future containers", () => {
+    expect(isLibavTranscodeContainer("mpegts")).toBe(false);
+    expect(isLibavTranscodeContainer("unknown")).toBe(false);
   });
 });

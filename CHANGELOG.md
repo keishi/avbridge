@@ -4,6 +4,32 @@ All notable changes to **avbridge.js** are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **rm/rmvb transcode input.** The AVI/ASF/FLV libav-demux transcode
+  pipeline now also handles RealMedia. Video codecs WebCodecs doesn't
+  support (rv10/20/30/40) go through a libav software video decoder
+  whose decoded frames are bridged to `VideoFrame` via
+  `laFrameToVideoFrame` — same downstream queue+drain → mediabunny
+  encode+mux. Audio codecs (cook, ra_144/288, sipr, atrac3) already
+  decode via libav in the Phase 1 audio path.
+
+### Changed
+
+- Removed the hard "WebCodecs doesn't support this video codec" throw
+  in the transcode-libav setup. The setup now tries WebCodecs first
+  and falls back to libav software decode silently. The only path
+  that throws at setup is when *both* fail — a codec neither WebCodecs
+  nor the avbridge libav variant can decode.
+- Migrated hybrid/fallback/remux from their duplicated copies of
+  `sanitizePacketTimestamp` / `sanitizeFrameTimestamp` /
+  `libavFrameToInterleavedFloat32` to the shared helpers in
+  `src/util/libav-demux.ts`. No behavioral change; bundle sizes
+  decreased slightly as a side effect (duplicates weren't tree-shaking
+  across strategy boundaries).
+
 ## [2.4.0]
 
 ### Added

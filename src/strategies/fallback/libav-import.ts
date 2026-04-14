@@ -23,5 +23,13 @@ export interface BridgeModule {
   audioStreamToConfig(libav: unknown, stream: unknown): Promise<AudioDecoderConfig | null>;
   packetToEncodedVideoChunk(pkt: unknown, stream: unknown): EncodedVideoChunk;
   packetToEncodedAudioChunk(pkt: unknown, stream: unknown): EncodedAudioChunk;
-  libavFrameToVideoFrame?(frame: unknown, stream: unknown): VideoFrame | null;
+  /**
+   * Convert a libav-decoded frame (software OR hardware decode) into a
+   * WebCodecs VideoFrame. `opts.timeBase` overrides the frame's per-packet
+   * timebase; useful when callers have already normalized pts to µs.
+   */
+  laFrameToVideoFrame(
+    frame: unknown,
+    opts?: { timeBase?: [number, number]; transfer?: boolean },
+  ): VideoFrame;
 }
