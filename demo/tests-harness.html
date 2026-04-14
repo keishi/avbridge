@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>avbridge — tests harness</title>
+  </head>
+  <body>
+    <!--
+      Minimal harness used by the Playwright cross-browser tests
+      (tests/browser/*.spec.ts). Exposes the avbridge API on
+      `window.avbridge` so tests can call probe() / classify() directly
+      from page.evaluate() without wiring a dedicated UI.
+
+      Not linked from the main demo; only loaded via Playwright.
+    -->
+    <script>
+      // Route libav variant loads through the Vite plugin at /libav/*.
+      // MUST be set before the ES module below loads avbridge — see
+      // CLAUDE.md "three libav path-resolution environments".
+      window.AVBRIDGE_LIBAV_BASE = "/libav";
+    </script>
+    <script type="module">
+      import { probe, classify } from "avbridge";
+      window.avbridge = { probe, classify };
+      // Signal readiness — tests wait for this.
+      window.__avbridgeReady = true;
+    </script>
+  </body>
+</html>

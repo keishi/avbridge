@@ -6,6 +6,11 @@ dist
 coverage
 demo/public/libav
 
+# Playwright browser-test artifacts
+playwright-report
+test-results
+/playwright/.cache
+
 # Local Claude Code config (per-developer permission whitelist)
 .claude/
 

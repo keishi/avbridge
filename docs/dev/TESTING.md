@@ -177,6 +177,47 @@ state" invariant documented in `WEB_COMPONENT_SPEC.md`.
 
 ---
 
+## Tier 4: Cross-browser matrix (Playwright)
+
+```bash
+npm run test:browser              # all three browsers
+npm run test:browser:chromium     # fast iteration
+npm run test:browser:firefox
+npm run test:browser:webkit
+npm run test:browser:ui           # watch mode with trace viewer
+```
+
+First-time setup: `npx playwright install chromium firefox webkit`
+(downloads ~300 MB of browser binaries, one-time).
+
+**What it validates:** avbridge picks the **right strategy per
+browser**. The expectations matrix lives in
+`tests/browser/_expectations.ts` — one place to update when a browser's
+codec support changes.
+
+**Scope discipline:**
+
+- `fixtures.spec.ts` — deterministic `probe()` + `classify()` output
+  per fixture per browser. Not playback; just the decision.
+- `playback.spec.ts` (follow-up) — bootstrap → play → destroy
+  lifecycle. Catches runtime escalation (e.g. Firefox MSE rejecting
+  HEVC and falling back to software decode).
+- `contract.spec.ts` (follow-up) — HTMLMediaElement event + property
+  parity across strategies and browsers.
+
+**Why Playwright instead of Puppeteer:** first-class multi-browser
+driver, auto-starts Vite via `webServer` config, `.spec.ts` with
+TypeScript. The five existing Puppeteer scripts are stable and stay
+as-is; they cover Chromium-only scenarios that don't need the
+multi-browser matrix.
+
+**Harness:** `demo/tests-harness.html` exposes `probe` and `classify`
+on `window.avbridge` for `page.evaluate()` to call. Sets
+`window.AVBRIDGE_LIBAV_BASE = "/libav"` so the libav variant resolves
+via the Vite middleware plugin — the same as the main demo pages.
+
+---
+
 ## Fixture corpus
 
 All test fixtures live in `tests/fixtures/` and are derived from a

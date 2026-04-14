@@ -92,6 +92,11 @@
     "test:element": "node scripts/element-test.mjs",
     "test:player-controls": "node scripts/player-controls-test.mjs",
     "test:url-streaming": "node scripts/url-streaming-test.mjs",
+    "test:browser": "playwright test",
+    "test:browser:chromium": "playwright test --project=chromium",
+    "test:browser:firefox": "playwright test --project=firefox",
+    "test:browser:webkit": "playwright test --project=webkit",
+    "test:browser:ui": "playwright test --ui",
     "fixtures": "node scripts/generate-fixtures.mjs",
     "audit:bundle": "node scripts/bundle-audit.mjs"
   },
@@ -104,6 +109,7 @@
     "@libav.js/types": "^6.8.8"
   },
   "devDependencies": {
+    "@playwright/test": "^1.59.1",
     "@types/node": "^20.11.0",
     "jsdom": "^24.0.0",
     "puppeteer": "^24.40.0",

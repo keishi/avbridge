@@ -50,6 +50,19 @@ const FIXTURES = [
     ],
   },
   {
+    name: "bbb-hevc-aac.mkv",
+    description: "MKV with HEVC + AAC — per-browser native/hybrid/fallback strategy boundary (WebKit can decode natively; Firefox can't at all; Chromium via WebCodecs hybrid)",
+    args: [
+      "-i", SOURCE,
+      "-c:v", "libx265",       // re-encode to HEVC
+      "-preset", "ultrafast",  // keep generation time reasonable
+      "-crf", "28",
+      "-tag:v", "hvc1",        // Apple/MP4-friendly tag (also works in MKV)
+      "-c:a", "copy",          // keep AAC
+      "-map", "0",
+    ],
+  },
+  {
     name: "bbb-h264-mp3.avi",
     description: "AVI with H.264 + MP3 — exercises the hybrid strategy (libav demux + WebCodecs decode)",
     args: [

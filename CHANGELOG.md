@@ -4,6 +4,27 @@ All notable changes to **avbridge.js** are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Cross-browser test tier (Playwright).** New `tests/browser/` directory
+  with the matrix run via `npm run test:browser` across Chromium, Firefox,
+  and WebKit. First slice — `fixtures.spec.ts` — validates that `probe()`
+  and `classify()` produce the expected output for each fixture on each
+  browser. Per-browser expectations live in `tests/browser/_expectations.ts`
+  so evolving browser codec support is a one-file change. Playwright's
+  `webServer` config auto-starts Vite; the five existing Puppeteer scripts
+  are unchanged and continue to cover Chromium-only scenarios.
+  Follow-up slices (`playback.spec.ts`, `contract.spec.ts`) land in
+  separate commits.
+- New test harness page at `demo/tests-harness.html` that exposes the
+  avbridge API on `window` for `page.evaluate()`-style tests. Only served
+  in dev mode; not shipped in production builds.
+- New fixture: `bbb-hevc-aac.mkv` (generated via `npm run fixtures`) for
+  exercising the HEVC native/hybrid/fallback strategy boundary across
+  browsers.
+
 ## [2.6.0]
 
 `<avbridge-player>` polish release. Four targeted ergonomics upgrades.
