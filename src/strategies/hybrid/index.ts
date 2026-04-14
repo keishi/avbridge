@@ -47,10 +47,11 @@ export async function createHybridSession(
     throw err;
   }
 
-  // Patch <video> element for the unified player layer. `paused` is
-  // mirrored from the audio clock so callers that inspect target.paused
-  // (notably doSetStrategy capturing wasPlaying) see the real play state
-  // — the underlying <video> never has its own src and stays paused.
+  // Patch <video> element for the unified player layer. The underlying
+  // <video> never has its own src; all playback state lives in the audio
+  // clock + canvas renderer. We expose that state via property getters
+  // so standard HTMLMediaElement consumers (like <avbridge-player>'s
+  // controls UI) see the real values.
   Object.defineProperty(target, "currentTime", {
     configurable: true,
     get: () => audio.now(),
@@ -59,6 +60,22 @@ export async function createHybridSession(
   Object.defineProperty(target, "paused", {
     configurable: true,
     get: () => !audio.isPlaying(),
+  });
+  Object.defineProperty(target, "volume", {
+    configurable: true,
+    get: () => audio.getVolume(),
+    set: (v: number) => {
+      audio.setVolume(v);
+      target.dispatchEvent(new Event("volumechange"));
+    },
+  });
+  Object.defineProperty(target, "muted", {
+    configurable: true,
+    get: () => audio.getMuted(),
+    set: (m: boolean) => {
+      audio.setMuted(m);
+      target.dispatchEvent(new Event("volumechange"));
+    },
   });
   if (ctx.duration && Number.isFinite(ctx.duration)) {
     Object.defineProperty(target, "duration", {
@@ -104,11 +121,16 @@ export async function createHybridSession(
       if (!audio.isPlaying()) {
         await waitForBuffer();
         await audio.start();
+        // Dispatch play/playing events so HTMLMediaElement consumers
+        // (e.g. <avbridge-player>'s controls UI) update their state.
+        target.dispatchEvent(new Event("play"));
+        target.dispatchEvent(new Event("playing"));
       }
     },
 
     pause() {
       void audio.pause();
+      target.dispatchEvent(new Event("pause"));
     },
 
     async seek(time) {
@@ -139,6 +161,8 @@ export async function createHybridSession(
         delete (target as unknown as Record<string, unknown>).currentTime;
         delete (target as unknown as Record<string, unknown>).duration;
         delete (target as unknown as Record<string, unknown>).paused;
+        delete (target as unknown as Record<string, unknown>).volume;
+        delete (target as unknown as Record<string, unknown>).muted;
       } catch { /* ignore */ }
     },
 

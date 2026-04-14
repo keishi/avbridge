@@ -95,12 +95,30 @@ export async function createFallbackSession(
       void doSeek(v);
     },
   });
-  // Mirror `paused` from the audio clock — the underlying <video> never
-  // has its own src, so its native `paused` is always true and would
-  // mislead doSetStrategy's wasPlaying capture on a backend switch.
+  // Mirror `paused` / `volume` / `muted` from the audio output — the
+  // underlying <video> never has its own src, so its native state is
+  // meaningless. This lets HTMLMediaElement consumers (<avbridge-player>
+  // controls) see the real values and control volume through the audio
+  // output's GainNode.
   Object.defineProperty(target, "paused", {
     configurable: true,
     get: () => !audio.isPlaying(),
+  });
+  Object.defineProperty(target, "volume", {
+    configurable: true,
+    get: () => audio.getVolume(),
+    set: (v: number) => {
+      audio.setVolume(v);
+      target.dispatchEvent(new Event("volumechange"));
+    },
+  });
+  Object.defineProperty(target, "muted", {
+    configurable: true,
+    get: () => audio.getMuted(),
+    set: (m: boolean) => {
+      audio.setMuted(m);
+      target.dispatchEvent(new Event("volumechange"));
+    },
   });
   // Mirror duration so the demo's controls can use target.duration too.
   if (ctx.duration && Number.isFinite(ctx.duration)) {
@@ -224,11 +242,14 @@ export async function createFallbackSession(
       if (!audio.isPlaying()) {
         await waitForBuffer();
         await audio.start();
+        target.dispatchEvent(new Event("play"));
+        target.dispatchEvent(new Event("playing"));
       }
     },
 
     pause() {
       void audio.pause();
+      target.dispatchEvent(new Event("pause"));
     },
 
     async seek(time) {
@@ -254,6 +275,8 @@ export async function createFallbackSession(
         delete (target as unknown as Record<string, unknown>).currentTime;
         delete (target as unknown as Record<string, unknown>).duration;
         delete (target as unknown as Record<string, unknown>).paused;
+        delete (target as unknown as Record<string, unknown>).volume;
+        delete (target as unknown as Record<string, unknown>).muted;
       } catch { /* ignore */ }
     },
 

@@ -76,10 +76,40 @@ export class AudioOutput implements ClockSource {
   private framesScheduled = 0;
   private destroyed = false;
 
+  /** User-set volume (0..1). Applied to the gain node. */
+  private _volume = 1;
+  /** User-set muted flag. When true, gain is forced to 0. */
+  private _muted = false;
+
   constructor() {
     this.ctx = new AudioContext();
     this.gain = this.ctx.createGain();
     this.gain.connect(this.ctx.destination);
+  }
+
+  /** Set volume (0..1). Applied immediately to the gain node. */
+  setVolume(v: number): void {
+    this._volume = Math.max(0, Math.min(1, v));
+    this.applyGain();
+  }
+
+  getVolume(): number {
+    return this._volume;
+  }
+
+  /** Set muted. When true, output is silenced regardless of volume. */
+  setMuted(m: boolean): void {
+    this._muted = m;
+    this.applyGain();
+  }
+
+  getMuted(): boolean {
+    return this._muted;
+  }
+
+  private applyGain(): void {
+    const target = this._muted ? 0 : this._volume;
+    try { this.gain.gain.value = target; } catch { /* ignore */ }
   }
 
   /**
@@ -287,6 +317,7 @@ export class AudioOutput implements ClockSource {
     try { this.gain.disconnect(); } catch { /* ignore */ }
     this.gain = this.ctx.createGain();
     this.gain.connect(this.ctx.destination);
+    this.applyGain();
 
     this.pendingQueue = [];
     this.mediaTimeOfAnchor = newMediaTime;
