@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>avbridge-player test harness</title>
+    <style>
+      body { background: #111; color: #eee; font-family: system-ui; padding: 16px; margin: 0; }
+      #container avbridge-player { display: block; width: 640px; height: 360px; }
+    </style>
+  </head>
+  <body>
+    <h1>avbridge-player test harness</h1>
+    <p>Drives the Puppeteer tests in <code>scripts/player-controls-test.mjs</code>.</p>
+    <div id="container"></div>
+    <script>
+      window.AVBRIDGE_LIBAV_BASE = "/libav";
+    </script>
+    <script type="module" src="./player-test.ts"></script>
+  </body>
+</html>

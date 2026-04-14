@@ -173,6 +173,7 @@ export default defineConfig(({ command }) => ({
         main: resolve(__dirname, "demo/index.html"),
         convert: resolve(__dirname, "demo/convert.html"),
         elementTest: resolve(__dirname, "demo/element-test.html"),
+        playerTest: resolve(__dirname, "demo/player-test.html"),
       },
     },
   },

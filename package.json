@@ -90,6 +90,7 @@
     "test:playback": "node scripts/playback-test.mjs",
     "test:convert": "node scripts/convert-test.mjs",
     "test:element": "node scripts/element-test.mjs",
+    "test:player-controls": "node scripts/player-controls-test.mjs",
     "test:url-streaming": "node scripts/url-streaming-test.mjs",
     "fixtures": "node scripts/generate-fixtures.mjs",
     "audit:bundle": "node scripts/bundle-audit.mjs"
