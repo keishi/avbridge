@@ -49,6 +49,7 @@ const MATRIX = [
   { label: "transcode webm vp9",      fixture: FIXTURE, container: "webm", video: "vp9",  audio: "opus",  quality: "medium" },
   { label: "transcode AVI h264+mp3 → mp4 (libav path)", fixture: FIXTURE_AVI_H264, container: "mp4", video: "h264", audio: "aac", quality: "medium", verify: "deep" },
   { label: "transcode AVI mpeg4+mp3 → mp4 (libav path, BSF)", fixture: FIXTURE_AVI_MPEG4, container: "mp4", video: "h264", audio: "aac", quality: "medium", verify: "deep" },
+  { label: "transcode AVI h264+mp3 → webm (libav path, VP9/Opus)", fixture: FIXTURE_AVI_H264, container: "webm", video: "vp9", audio: "opus", quality: "medium", verify: "deep" },
 ];
 
 // transcode() now handles the headless Chromium H.264 encoder first-call

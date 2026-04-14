@@ -15,6 +15,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `laFrameToVideoFrame` — same downstream queue+drain → mediabunny
   encode+mux. Audio codecs (cook, ra_144/288, sipr, atrac3) already
   decode via libav in the Phase 1 audio path.
+- **WebM and MKV output from legacy containers.** The libav-demux
+  transcode path previously only emitted MP4. Now any supported output
+  format (mp4, webm, mkv) works. Default codecs adapt per output:
+  mp4/mkv → h264/aac, webm → vp9/opus. The existing
+  `validateCodecCompatibility` gate (in `transcode()`) still catches
+  nonsense combos like webm + h264.
 
 ### Changed
 

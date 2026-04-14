@@ -1,18 +1,20 @@
 /**
- * AVI/ASF/FLV transcode pipeline (Phase 1).
+ * Legacy-container transcode pipeline.
  *
- * One-pass: libav demux → WebCodecs VideoDecoder + libav software audio
- * decode → VideoSample / AudioSample → mediabunny Output → MP4 Blob.
+ * One-pass: libav demux → WebCodecs VideoDecoder (or libav software video
+ * decode for rv40/etc.) + libav software audio decode → VideoSample /
+ * AudioSample → mediabunny Output → MP4 / WebM / MKV Blob.
  *
- * Only reached from src/convert/transcode.ts when the input container is
- * in {avi, asf, flv}. MP4/MKV/WebM/etc. still go through the mediabunny
- * Conversion path in transcode.ts.
+ * Reached from src/convert/transcode.ts when the input container is one of
+ * {avi, asf, flv, rm/rmvb} (see isLibavTranscodeContainer). MP4/MKV/WebM/etc.
+ * sources still go through the mediabunny Conversion path in transcode.ts.
  *
- * Scope limits (Phase 1 — see docs/dev/ROADMAP.md):
- * - MP4 output only.
+ * Scope limits (see docs/dev/ROADMAP.md):
  * - Single video + single audio track. Extra tracks are silently dropped.
  * - 8-bit video only; 10-bit throws with a clear error.
  * - No seek. Linear read-to-EOF.
+ * - `outputStream` (streaming output to a WritableStream) is not yet
+ *   wired for this path — throws with a clear error if requested.
  */
 
 // Lazy imports: libav-demux + the libav-loader chain it pulls in are heavy.
@@ -51,16 +53,23 @@ export async function transcodeViaLibav(
   options: TranscodeOptions,
 ): Promise<ConvertResult> {
   const outputFormat = options.outputFormat ?? "mp4";
-  if (outputFormat !== "mp4") {
+  // Output format gate: mp4, webm, and mkv are supported. The shared
+  // createOutputFormat helper in remux.ts handles the muxer side.
+  if (outputFormat !== "mp4" && outputFormat !== "webm" && outputFormat !== "mkv") {
     throw new AvbridgeError(
       ERR_TRANSCODE_UNSUPPORTED_COMBO,
-      `AVI/ASF/FLV transcode currently supports MP4 output only (got "${outputFormat}").`,
-      `Use outputFormat: "mp4", or remux() the source to MP4 first and then transcode.`,
+      `legacy-container transcode supports MP4, WebM, and MKV output (got "${outputFormat}").`,
+      `Use outputFormat: "mp4", "webm", or "mkv".`,
     );
   }
-
-  const videoCodec: OutputVideoCodec = options.videoCodec ?? "h264";
-  const audioCodec: OutputAudioCodec = options.audioCodec ?? "aac";
+  // Codec defaults depend on output format. `transcode()` already calls
+  // validateCodecCompatibility with the user-supplied codecs, but when
+  // we're reached directly or with just outputFormat set, pick sensible
+  // defaults per container.
+  const videoCodec: OutputVideoCodec =
+    options.videoCodec ?? (outputFormat === "webm" ? "vp9" : "h264");
+  const audioCodec: OutputAudioCodec =
+    options.audioCodec ?? (outputFormat === "webm" ? "opus" : "aac");
   const quality: TranscodeQuality = options.quality ?? "medium";
   options.signal?.throwIfAborted();
 
@@ -96,15 +105,15 @@ export async function transcodeViaLibav(
       throw new Error("transcode: source has no decodable tracks");
     }
 
-    // ── Set up mediabunny Output (MP4 via BufferTarget for Phase 1) ──
+    // ── Set up mediabunny Output (BufferTarget — in-memory) ──────────
     // outputStream is not yet supported for the libav path — the
     // sample-source + encoder chain doesn't expose the same StreamTarget
     // hook that mediabunny's Conversion uses internally. Flag loudly.
     if (options.outputStream) {
       throw new AvbridgeError(
         ERR_TRANSCODE_UNSUPPORTED_COMBO,
-        "outputStream is not supported for AVI/ASF/FLV transcode in this release.",
-        "Remove the outputStream option to receive the transcoded blob in memory. Streaming output for this path is planned for Phase 2.",
+        "outputStream is not yet supported for the libav-backed transcode path.",
+        "Remove the outputStream option to receive the transcoded blob in memory. Streaming output for this path is on the roadmap.",
       );
     }
     const bufferTarget = new mb.BufferTarget();
