@@ -241,12 +241,18 @@ export const PLAYER_STYLES = /* css */ `
   border-radius: 50%;
   background: #f00;
   top: 50%;
-  transform: translate(-50%, -50%) scale(0);
+  /* Position the thumb so its center follows the native range input's
+   * click-to-value math: at value=0 the thumb's left edge is at 0, at
+   * value=max the thumb's right edge is at 100%. This keeps the thumb
+   * center within [thumbWidth/2, trackWidth - thumbWidth/2] instead of
+   * letting it overflow the track. Driven by --pct (0..100) set in JS. */
+  left: calc((100% - 12px) * var(--pct, 0) / 100);
+  transform: translateY(-50%) scale(0);
   transition: transform 0.1s;
   pointer-events: none;
 }
 
-.avp-seek:hover .avp-seek-thumb { transform: translate(-50%, -50%) scale(1); }
+.avp-seek:hover .avp-seek-thumb { transform: translateY(-50%) scale(1); }
 
 .avp-seek-tooltip {
   position: absolute;
@@ -456,7 +462,7 @@ export const PLAYER_STYLES = /* css */ `
   .avp-btn { padding: 8px; }
   .avp-seek-track { height: 4px; }
   .avp-seek:hover .avp-seek-track { height: 4px; }
-  .avp-seek-thumb { transform: translate(-50%, -50%) scale(1); }
+  .avp-seek-thumb { transform: translateY(-50%) scale(1); }
   .avp-volume:hover .avp-volume-slider { width: 0; }
   .avp-overlay-btn { width: 56px; height: 56px; }
   .avp-overlay-btn svg { width: 30px; height: 30px; }

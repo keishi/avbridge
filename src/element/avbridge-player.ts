@@ -353,7 +353,9 @@ export class AvbridgePlayerElement extends HTMLElement {
     const dur = this._video.duration || 0;
     const pct = dur > 0 ? (t / dur) * 100 : 0;
     this._seekProgress.style.width = `${pct}%`;
-    this._seekThumb.style.left = `${pct}%`;
+    // Thumb position uses a CSS calc that matches the native range input's
+    // click-to-value math (thumb stays within track bounds). See player-styles.ts.
+    this._seekThumb.style.setProperty("--pct", String(pct));
   }
 
   // ── Controls: time ─────────────────────────────────────────────────────
