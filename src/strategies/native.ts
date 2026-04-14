@@ -49,10 +49,13 @@ export async function createNativeSession(
       video.currentTime = time;
     },
     async setAudioTrack(id) {
-      // HTMLMediaElement.audioTracks is not exposed in all browsers, so we
-      // try-catch and no-op if not available.
+      // HTMLMediaElement.audioTracks isn't exposed on all browsers (Chrome
+      // needs the MediaCapabilities flag for many containers). Best-effort:
+      // try by string id match first, then by index. If the list doesn't
+      // exist, silently no-op — the user will still hear whatever track the
+      // browser picked by default.
       const tracks = (video as unknown as { audioTracks?: { length: number; [i: number]: { id: string; enabled: boolean } } }).audioTracks;
-      if (!tracks) return;
+      if (!tracks || tracks.length === 0) return;
       for (let i = 0; i < tracks.length; i++) {
         tracks[i].enabled = tracks[i].id === String(id) || i === id;
       }

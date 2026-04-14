@@ -137,8 +137,23 @@ export async function createHybridSession(
       await doSeek(time);
     },
 
-    async setAudioTrack(_id) {
-      // Post-MVP for hybrid strategy
+    async setAudioTrack(id) {
+      if (!ctx.audioTracks.some((t) => t.id === id)) {
+        console.warn("[avbridge] hybrid: setAudioTrack — unknown track id", id);
+        return;
+      }
+      const wasPlaying = audio.isPlaying();
+      const currentTime = audio.now();
+      await audio.pause().catch(() => {});
+      await handles.setAudioTrack(id, currentTime).catch((err) =>
+        console.warn("[avbridge] hybrid: handles.setAudioTrack failed:", err),
+      );
+      await audio.reset(currentTime);
+      renderer.flush();
+      if (wasPlaying) {
+        await waitForBuffer();
+        await audio.start();
+      }
     },
 
     async setSubtitleTrack(_id) {

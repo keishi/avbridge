@@ -24,6 +24,8 @@ import { pickLibavVariant } from "../fallback/variant-routing.js";
 export interface HybridDecoderHandles {
   destroy(): Promise<void>;
   seek(timeSec: number): Promise<void>;
+  /** Swap the active audio track — rebuilds the libav audio decoder + reseeks. */
+  setAudioTrack(trackId: number, timeSec: number): Promise<void>;
   stats(): Record<string, unknown>;
   onFatalError(handler: (reason: string) => void): void;
 }
@@ -52,7 +54,14 @@ export async function startHybridDecoder(opts: StartHybridDecoderOptions): Promi
   const readPkt = await libav.av_packet_alloc();
   const [fmt_ctx, streams] = await libav.ff_init_demuxer_file(opts.filename);
   const videoStream = streams.find((s) => s.codec_type === libav.AVMEDIA_TYPE_VIDEO) ?? null;
-  const audioStream = streams.find((s) => s.codec_type === libav.AVMEDIA_TYPE_AUDIO) ?? null;
+  // Audio stream is mutable (setAudioTrack swaps it). Prefer the id the
+  // probe layer listed first so both entry points agree.
+  const firstAudioTrackId = opts.context.audioTracks[0]?.id;
+  let audioStream: LibavStream | null =
+    (firstAudioTrackId != null
+      ? streams.find((s) => s.codec_type === libav.AVMEDIA_TYPE_AUDIO && s.index === firstAudioTrackId)
+      : undefined) ??
+    streams.find((s) => s.codec_type === libav.AVMEDIA_TYPE_AUDIO) ?? null;
 
   if (!videoStream && !audioStream) {
     throw new Error("hybrid decoder: file has no decodable streams");
@@ -386,6 +395,79 @@ export async function startHybridDecoder(opts: StartHybridDecoderOptions): Promi
       try { await libav.av_packet_free?.(readPkt); } catch { /* ignore */ }
       try { await libav.avformat_close_input_js(fmt_ctx); } catch { /* ignore */ }
       try { await inputHandle.detach(); } catch { /* ignore */ }
+    },
+
+    async setAudioTrack(trackId, timeSec) {
+      if (audioStream && audioStream.index === trackId) return;
+      const newStream = streams.find(
+        (s) => s.codec_type === libav.AVMEDIA_TYPE_AUDIO && s.index === trackId,
+      );
+      if (!newStream) {
+        console.warn("[avbridge] hybrid: setAudioTrack — no stream with id", trackId);
+        return;
+      }
+
+      const newToken = ++pumpToken;
+      if (pumpRunning) {
+        try { await pumpRunning; } catch { /* ignore */ }
+      }
+      if (destroyed) return;
+
+      // Tear down old audio decoder, build new one.
+      if (audioDec) {
+        try { await libav.ff_free_decoder?.(audioDec.c, audioDec.pkt, audioDec.frame); } catch { /* ignore */ }
+        audioDec = null;
+      }
+      try {
+        const [, c, pkt, frame] = await libav.ff_init_decoder(newStream.codec_id, {
+          codecpar: newStream.codecpar,
+        });
+        audioDec = { c, pkt, frame };
+        audioTimeBase = newStream.time_base_num && newStream.time_base_den
+          ? [newStream.time_base_num, newStream.time_base_den]
+          : undefined;
+      } catch (err) {
+        console.warn(
+          "[avbridge] hybrid: setAudioTrack init failed — switching to no-audio:",
+          (err as Error).message,
+        );
+        audioDec = null;
+        opts.audio.setNoAudio();
+      }
+
+      audioStream = newStream;
+
+      // Re-seek demuxer to current time for the new track.
+      try {
+        const tsUs = Math.floor(timeSec * 1_000_000);
+        const [tsLo, tsHi] = libav.f64toi64
+          ? libav.f64toi64(tsUs)
+          : [tsUs | 0, Math.floor(tsUs / 0x100000000)];
+        await libav.av_seek_frame(
+          fmt_ctx,
+          -1,
+          tsLo,
+          tsHi,
+          libav.AVSEEK_FLAG_BACKWARD ?? 0,
+        );
+      } catch (err) {
+        console.warn("[avbridge] hybrid: setAudioTrack seek failed:", err);
+      }
+
+      // Flush video decoder too — demuxer moved back to a keyframe.
+      try {
+        if (videoDecoder && videoDecoder.state === "configured") {
+          await videoDecoder.flush();
+        }
+      } catch { /* ignore */ }
+      await flushBSF();
+
+      syntheticVideoUs = Math.round(timeSec * 1_000_000);
+      syntheticAudioUs = Math.round(timeSec * 1_000_000);
+
+      pumpRunning = pumpLoop(newToken).catch((err) =>
+        console.error("[avbridge] hybrid pump failed (post-setAudioTrack):", err),
+      );
     },
 
     async seek(timeSec) {

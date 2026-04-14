@@ -256,8 +256,25 @@ export async function createFallbackSession(
       await doSeek(time);
     },
 
-    async setAudioTrack(_id) {
-      // Multi-track audio is post-MVP for the fallback strategy.
+    async setAudioTrack(id) {
+      // Verify the id refers to a real track.
+      if (!ctx.audioTracks.some((t) => t.id === id)) {
+        console.warn("[avbridge] fallback: setAudioTrack — unknown track id", id);
+        return;
+      }
+      const wasPlaying = audio.isPlaying();
+      const currentTime = audio.now();
+      // Suspend audio, rebuild the decoder + seek, reset audio output, re-gate.
+      await audio.pause().catch(() => {});
+      await handles.setAudioTrack(id, currentTime).catch((err) =>
+        console.warn("[avbridge] fallback: handles.setAudioTrack failed:", err),
+      );
+      await audio.reset(currentTime);
+      renderer.flush();
+      if (wasPlaying) {
+        await waitForBuffer();
+        await audio.start();
+      }
     },
 
     async setSubtitleTrack(_id) {

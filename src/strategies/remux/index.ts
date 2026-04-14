@@ -66,8 +66,20 @@ export async function createRemuxSession(
       const wasPlaying = !video.paused;
       await pipeline.seek(time, wasPlaying || wantPlay);
     },
-    async setAudioTrack(_id) {
-      // v1: single-track output. Multi-audio remuxing is post-MVP.
+    async setAudioTrack(id) {
+      if (!context.audioTracks.some((t) => t.id === id)) {
+        console.warn("[avbridge] remux: setAudioTrack — unknown track id", id);
+        return;
+      }
+      const wasPlaying = !video.paused;
+      const time = video.currentTime || 0;
+      // Not yet started? Just note the selection and let play()/seek() drive.
+      if (!started) {
+        started = true;
+        await pipeline.setAudioTrack(id, time, wantPlay || wasPlaying);
+        return;
+      }
+      await pipeline.setAudioTrack(id, time, wasPlaying || wantPlay);
     },
     async setSubtitleTrack(id) {
       const tracks = video.textTracks;

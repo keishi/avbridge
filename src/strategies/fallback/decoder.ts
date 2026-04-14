@@ -34,6 +34,13 @@ export interface DecoderHandles {
   destroy(): Promise<void>;
   /** Seek to the given time in seconds. Returns once the new pump has been kicked off. */
   seek(timeSec: number): Promise<void>;
+  /**
+   * Switch the active audio track. The decoder tears down the current audio
+   * decoder, initializes one for the stream whose container id matches
+   * `trackId` (== libav `stream.index`), seeks the demuxer to `timeSec`, and
+   * restarts the pump. No-op if the track is already active.
+   */
+  setAudioTrack(trackId: number, timeSec: number): Promise<void>;
   stats(): Record<string, unknown>;
 }
 
@@ -63,7 +70,15 @@ export async function startDecoder(opts: StartDecoderOptions): Promise<DecoderHa
 
   const [fmt_ctx, streams] = await libav.ff_init_demuxer_file(opts.filename);
   const videoStream = streams.find((s) => s.codec_type === libav.AVMEDIA_TYPE_VIDEO) ?? null;
-  const audioStream = streams.find((s) => s.codec_type === libav.AVMEDIA_TYPE_AUDIO) ?? null;
+  // Audio stream is mutable so setAudioTrack() can swap it. Default to the
+  // track the context picked first (matches probe ordering). We resolve by
+  // container id so the selection survives stream reordering.
+  const firstAudioTrackId = opts.context.audioTracks[0]?.id;
+  let audioStream: LibavStream | null =
+    (firstAudioTrackId != null
+      ? streams.find((s) => s.codec_type === libav.AVMEDIA_TYPE_AUDIO && s.index === firstAudioTrackId)
+      : undefined) ??
+    streams.find((s) => s.codec_type === libav.AVMEDIA_TYPE_AUDIO) ?? null;
 
   if (!videoStream && !audioStream) {
     throw new Error("fallback decoder: file has no decodable streams");
@@ -453,6 +468,78 @@ export async function startDecoder(opts: StartDecoderOptions): Promise<DecoderHa
       try { await libav.av_packet_free?.(readPkt); } catch { /* ignore */ }
       try { await libav.avformat_close_input_js(fmt_ctx); } catch { /* ignore */ }
       try { await inputHandle.detach(); } catch { /* ignore */ }
+    },
+
+    async setAudioTrack(trackId, timeSec) {
+      if (audioStream && audioStream.index === trackId) return;
+      const newStream = streams.find(
+        (s) => s.codec_type === libav.AVMEDIA_TYPE_AUDIO && s.index === trackId,
+      );
+      if (!newStream) {
+        console.warn("[avbridge] fallback: setAudioTrack — no stream with id", trackId);
+        return;
+      }
+
+      // Stop the pump before touching libav state. Same discipline as seek().
+      const newToken = ++pumpToken;
+      if (pumpRunning) {
+        try { await pumpRunning; } catch { /* ignore */ }
+      }
+      if (destroyed) return;
+
+      // Tear down the old audio decoder and init a fresh one for the new stream.
+      if (audioDec) {
+        try { await libav.ff_free_decoder?.(audioDec.c, audioDec.pkt, audioDec.frame); } catch { /* ignore */ }
+        audioDec = null;
+      }
+      try {
+        const [, c, pkt, frame] = await libav.ff_init_decoder(newStream.codec_id, {
+          codecpar: newStream.codecpar,
+        });
+        audioDec = { c, pkt, frame };
+        audioTimeBase = newStream.time_base_num && newStream.time_base_den
+          ? [newStream.time_base_num, newStream.time_base_den]
+          : undefined;
+      } catch (err) {
+        console.warn(
+          "[avbridge] fallback: setAudioTrack init failed — falling back to no-audio mode:",
+          (err as Error).message,
+        );
+        audioDec = null;
+        opts.audio.setNoAudio();
+      }
+
+      audioStream = newStream;
+
+      // Re-seek so packets resume from the user's current position for the
+      // new track (and the same video position).
+      try {
+        const tsUs = Math.floor(timeSec * 1_000_000);
+        const [tsLo, tsHi] = libav.f64toi64
+          ? libav.f64toi64(tsUs)
+          : [tsUs | 0, Math.floor(tsUs / 0x100000000)];
+        await libav.av_seek_frame(
+          fmt_ctx,
+          -1,
+          tsLo,
+          tsHi,
+          libav.AVSEEK_FLAG_BACKWARD ?? 0,
+        );
+      } catch (err) {
+        console.warn("[avbridge] fallback: setAudioTrack seek failed:", err);
+      }
+
+      // Flush the video decoder too — we just moved the demuxer back to a
+      // keyframe boundary.
+      try { if (videoDec) await libav.avcodec_flush_buffers?.(videoDec.c); } catch { /* ignore */ }
+      await flushBSF();
+
+      syntheticVideoUs = Math.round(timeSec * 1_000_000);
+      syntheticAudioUs = Math.round(timeSec * 1_000_000);
+
+      pumpRunning = pumpLoop(newToken).catch((err) =>
+        console.error("[avbridge] fallback pump failed (post-setAudioTrack):", err),
+      );
     },
 
     async seek(timeSec) {
