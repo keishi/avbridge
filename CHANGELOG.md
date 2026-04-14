@@ -4,6 +4,32 @@ All notable changes to **avbridge.js** are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.0]
+
+### Added
+
+- **Multi-audio track selection across all strategies.** The
+  `<avbridge-player>` audio track menu previously rendered the list but
+  `setAudioTrack(id)` was a no-op in every strategy. Fallback and hybrid
+  rebuild the libav audio decoder and reseek. Remux rebuilds the
+  mediabunny Output (MSE SourceBuffer mime can change across tracks).
+  Common pain for anime/movie rips with dual-language audio.
+- **AVI/ASF/FLV input support for MP4 transcoding.** New libav-demux-backed
+  transcode pipeline: libav demux → WebCodecs `VideoDecoder` + libav
+  software audio decode → mediabunny `VideoSampleSource` /
+  `AudioSampleSource` → MP4 Blob. Phase 1 scope: MP4 output only, single
+  video + single audio track, 8-bit video. Extra tracks are silently
+  dropped. 10-bit sources throw with a clear error. rm/rmvb, WebM output,
+  and multi-track output remain on the roadmap.
+- Shared `src/util/libav-demux.ts` helper (`openLibavDemux`,
+  `sanitizePacketTimestamp`, `sanitizeFrameTimestamp`,
+  `libavFrameToInterleavedFloat32`). Phase 1 only consumed by the new
+  transcode path; hybrid/fallback/remux keep their own copies and migrate
+  in a follow-up.
+- New error codes: `ERR_AVBRIDGE_TRANSCODE_ABORTED`,
+  `ERR_AVBRIDGE_TRANSCODE_UNSUPPORTED_COMBO`,
+  `ERR_AVBRIDGE_TRANSCODE_DECODE`, `ERR_AVBRIDGE_CONTAINER_NOT_SUPPORTED`.
+
 ## [2.3.0]
 
 This release makes avbridge.js production-ready for authenticated

@@ -604,6 +604,10 @@ function sanitizeFrameTimestamp(
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Audio frame → interleaved Float32 (duplicated from fallback/decoder.ts)
+// TODO(libav-demux-migration): extracted to src/util/libav-demux.ts
+// (libavFrameToInterleavedFloat32). Migrate this file to import from there
+// when touching the pump for other reasons — see transcode-libav.ts for
+// the intended consumer pattern.
 // ─────────────────────────────────────────────────────────────────────────────
 
 const AV_SAMPLE_FMT_U8 = 0;

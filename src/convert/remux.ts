@@ -386,6 +386,9 @@ async function doLibavRemux(
 }
 
 // ── Packet timestamp sanitizer (from hybrid/decoder.ts) ─────────────────────
+// TODO(libav-demux-migration): sanitizePacketTimestamp now lives in
+// src/util/libav-demux.ts. Migrate this callsite when next editing the
+// remux pump — see transcode-libav.ts for the consumer pattern.
 
 function sanitizePacketTimestamp(
   pkt: LibavPacket,

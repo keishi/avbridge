@@ -16,6 +16,8 @@
 import { probe } from "../probe/index.js";
 import { buildMediabunnySourceFromInput } from "../probe/mediabunny.js";
 import { createOutputFormat, mimeForFormat, generateFilename } from "./remux.js";
+import { isLibavTranscodeContainer, transcodeViaLibav } from "./transcode-libav.js";
+import { AvbridgeError, ERR_CONTAINER_NOT_SUPPORTED } from "../errors.js";
 import type {
   MediaInput,
   MediaContext,
@@ -54,11 +56,17 @@ export async function transcode(
   const ctx = await probe(source);
   options.signal?.throwIfAborted();
 
+  // AVI/ASF/FLV → the libav-demux-backed pipeline (Phase 1: MP4 output only).
+  if (isLibavTranscodeContainer(ctx.container)) {
+    return transcodeViaLibav(ctx, options);
+  }
+
   if (!MEDIABUNNY_CONTAINERS.has(ctx.container)) {
-    throw new Error(
-      `Cannot transcode "${ctx.container}" sources in v1. ` +
-      `transcode() only supports inputs that mediabunny can read (MP4, MKV, WebM, OGG, MP3, FLAC, WAV, MOV). ` +
-      `For AVI/ASF/FLV sources, use the player's playback strategies instead.`,
+    throw new AvbridgeError(
+      ERR_CONTAINER_NOT_SUPPORTED,
+      `Cannot transcode "${ctx.container}" sources. ` +
+      `transcode() supports mediabunny-readable containers (MP4, MKV, WebM, OGG, MP3, FLAC, WAV, MOV) and legacy containers via the libav path (AVI, ASF, FLV).`,
+      `If this is a legacy container we don't yet support, use createPlayer() to play it. Transcode support for more containers is on the roadmap.`,
     );
   }
 

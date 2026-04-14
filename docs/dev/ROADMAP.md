@@ -1,6 +1,6 @@
 # avbridge.js — Roadmap
 
-Current released version: **v2.3.0** (2026-04-14)
+Current released version: **v2.4.0** (2026-04-14)
 
 ## Project philosophy
 
@@ -131,24 +131,40 @@ Documented in `docs/dev/POSTMORTEMS.md`.
 
 ---
 
-## v2.4.x — Breadth
+### v2.4.0 — Track selection + legacy transcode input
+
+Released 2026-04-14.
+
+- **Multi-audio track selection** across all four strategies. The
+  `<avbridge-player>` audio-track menu was cosmetic until this release;
+  `setAudioTrack(id)` now rebuilds the audio decoder (fallback/hybrid)
+  or the mediabunny Output (remux) and reseeks.
+- **AVI/ASF/FLV input support for MP4 transcoding** (Phase 1). New
+  libav-demux-backed transcode pipeline (`src/convert/transcode-libav.ts`)
+  using shared helper at `src/util/libav-demux.ts`. Single video +
+  single audio track, MP4 output only, 8-bit video. Extra tracks
+  silently dropped. Phase 2 (WebM output, multi-track, rm/rmvb input,
+  10-bit, streaming output) deferred.
+
+---
+
+## v2.5.x — Breadth
 
 Ordered by likely user pain, not implementation difficulty.
 
-### Multi-audio track selection
+### Transcode path Phase 2
 
-- Remux strategy is single-track output (`setAudioTrack` is a no-op).
-- Hybrid/fallback don't expose track selection.
-- `<avbridge-player>` has a UI menu for it (`setAudioTrack(id)` on
-  the element), but the underlying strategies don't honor it.
-- Common in anime, movies, and rips — users expect switching.
-
-### AVI/ASF/FLV transcode input
-
-`transcode()` currently only accepts mediabunny-readable containers
-(MP4/MKV/WebM/OGG/MOV/MP3/FLAC/WAV). Wiring the libav demux →
-WebCodecs encode path completes the "any format in, modern format
-out" promise.
+- **WebM output from AVI/ASF/FLV** (VP9/Opus encode path).
+- **Multi-track output** in the libav transcode path. Depends on the
+  bigger multi-track-output roadmap item.
+- **rm/rmvb transcode input** once codec coverage through WebCodecs is
+  verified (rv40 in particular).
+- **10-bit video transcode**. Needs pixel-format conversion before
+  feeding `VideoSample`.
+- **Streaming output** (`StreamTarget`) from the libav transcode path —
+  currently only supported in the mediabunny Conversion path.
+- **Migrate hybrid/fallback/remux to `libav-demux.ts`** (mechanical
+  follow-up deferred from v2.4 Phase 1).
 
 ### `<avbridge-player>` polish
 

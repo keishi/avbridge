@@ -26,21 +26,29 @@ import { stat } from "node:fs/promises";
 import { parseArgs } from "node:util";
 
 const FIXTURE = resolve("tests/fixtures/big-buck-bunny-480p-30sec.mp4");
+const FIXTURE_AVI_H264 = resolve("tests/fixtures/bbb-h264-mp3.avi");
+const FIXTURE_AVI_MPEG4 = resolve("tests/fixtures/bbb-mpeg4-mp3.avi");
 
 /**
  * Test matrix: each entry = (label, { container, video, audio, quality, ... })
  *
- * The fixture is MP4 H.264/AAC, so:
+ * The primary fixture is MP4 H.264/AAC, so:
  * - copy + mp4  = remux (lossless container repackage)
  * - copy + mkv  = remux (container change)
  * - h264 + 480p = transcode with resize (realistic downscale scenario)
  * - vp9  + webm = transcode (full codec + container change)
+ *
+ * AVI fixtures exercise the Phase 1 libav-demux → WebCodecs re-encode path.
+ * `verify: "deep"` means: after the blob is produced, load it back into a
+ * bare `<video>` and assert duration, playback advances, and codec identity.
  */
 const MATRIX = [
-  { label: "remux mp4 (copy)",       container: "mp4",  video: "copy", audio: "copy",  quality: "medium" },
-  { label: "remux mkv (copy)",       container: "mkv",  video: "copy", audio: "copy",  quality: "medium" },
-  { label: "transcode mp4 h264 480p (sw)", container: "mp4",  video: "h264", audio: "aac",   quality: "medium", width: 480, height: 270, hwAccel: "prefer-software" },
-  { label: "transcode webm vp9",      container: "webm", video: "vp9",  audio: "opus",  quality: "medium" },
+  { label: "remux mp4 (copy)",       fixture: FIXTURE, container: "mp4",  video: "copy", audio: "copy",  quality: "medium" },
+  { label: "remux mkv (copy)",       fixture: FIXTURE, container: "mkv",  video: "copy", audio: "copy",  quality: "medium" },
+  { label: "transcode mp4 h264 480p (sw)", fixture: FIXTURE, container: "mp4",  video: "h264", audio: "aac",   quality: "medium", width: 480, height: 270, hwAccel: "prefer-software" },
+  { label: "transcode webm vp9",      fixture: FIXTURE, container: "webm", video: "vp9",  audio: "opus",  quality: "medium" },
+  { label: "transcode AVI h264+mp3 → mp4 (libav path)", fixture: FIXTURE_AVI_H264, container: "mp4", video: "h264", audio: "aac", quality: "medium", verify: "deep" },
+  { label: "transcode AVI mpeg4+mp3 → mp4 (libav path, BSF)", fixture: FIXTURE_AVI_MPEG4, container: "mp4", video: "h264", audio: "aac", quality: "medium", verify: "deep" },
 ];
 
 // transcode() now handles the headless Chromium H.264 encoder first-call
@@ -66,10 +74,12 @@ const BASE_URL = `http://localhost:${PORT}/convert.html`;
 // ── Main ────────────────────────────────────────────────────────────────────
 
 async function main() {
-  const fixtureStat = await stat(FIXTURE).catch(() => null);
-  if (!fixtureStat) {
-    console.error(`[test] fixture not found: ${FIXTURE}`);
-    process.exit(1);
+  for (const f of [FIXTURE, FIXTURE_AVI_H264, FIXTURE_AVI_MPEG4]) {
+    const s = await stat(f).catch(() => null);
+    if (!s) {
+      console.error(`[test] fixture not found: ${f}`);
+      process.exit(1);
+    }
   }
 
   let puppeteer;
@@ -95,7 +105,7 @@ async function main() {
   for (const cfg of MATRIX) {
     if (!JSON_OUTPUT) process.stdout.write(`\n[test] ${cfg.label} ... `);
 
-    const r = await runConversion(browser, FIXTURE, cfg);
+    const r = await runConversion(browser, cfg.fixture ?? FIXTURE, cfg);
     results.push({ label: cfg.label, ...r });
 
     if (r.status === "PASS") {
@@ -226,9 +236,59 @@ async function runConversion(browser, filePath, cfg) {
     const expectedContainer = cfg.container;
     const ok = info.container === expectedContainer && info.size && parseSize(info.size) > 0;
 
+    if (!ok) {
+      return {
+        status: "FAIL",
+        error: `output mismatch (got container=${info.container}, size=${info.size})`,
+        container: info.container,
+        videoCodec: info.videoCodec,
+        audioCodec: info.audioCodec,
+        size: parseSize(info.size),
+        elapsedSec: info.elapsedSec ?? 0,
+        consoleErrors: consoleErrors.length > 0 ? consoleErrors.slice(0, 5) : undefined,
+      };
+    }
+
+    // Deep verification for the libav transcode path: reload the output
+    // blob into a bare <video> and assert it plays + duration lines up.
+    let deepError;
+    if (cfg.verify === "deep") {
+      deepError = await page.evaluate(async () => {
+        const href = document.getElementById("download")?.getAttribute("href");
+        if (!href) return "deep-verify: download href missing";
+        const v = document.createElement("video");
+        v.muted = true;        // allow autoplay in headless
+        v.src = href;
+        v.preload = "auto";
+        document.body.appendChild(v);
+        try {
+          await new Promise((res, rej) => {
+            const timer = setTimeout(() => rej(new Error("loadedmetadata timeout")), 10000);
+            v.addEventListener("loadedmetadata", () => { clearTimeout(timer); res(); }, { once: true });
+            v.addEventListener("error", () => { clearTimeout(timer); rej(new Error("video load error")); }, { once: true });
+          });
+          const duration = v.duration;
+          if (!Number.isFinite(duration) || duration <= 0) {
+            return `deep-verify: bad duration ${duration}`;
+          }
+          const t0 = v.currentTime;
+          await v.play().catch(() => {});
+          await new Promise((r) => setTimeout(r, 2000));
+          const t1 = v.currentTime;
+          v.pause();
+          if (t1 - t0 < 1.0) {
+            return `deep-verify: playback did not advance (t0=${t0}, t1=${t1})`;
+          }
+          return null;
+        } finally {
+          try { v.remove(); } catch { /* ignore */ }
+        }
+      });
+    }
+
     return {
-      status: ok ? "PASS" : "FAIL",
-      error: ok ? undefined : `output mismatch (got container=${info.container}, size=${info.size})`,
+      status: deepError ? "FAIL" : "PASS",
+      error: deepError ?? undefined,
       container: info.container,
       videoCodec: info.videoCodec,
       audioCodec: info.audioCodec,

@@ -4,6 +4,7 @@ import {
   defaultAudioCodec,
   validateCodecCompatibility,
 } from "../src/convert/transcode.js";
+import { isLibavTranscodeContainer } from "../src/convert/transcode-libav.js";
 
 describe("defaultVideoCodec", () => {
   it("returns h264 for mp4", () => {
@@ -82,5 +83,31 @@ describe("validateCodecCompatibility", () => {
     expect(() => validateCodecCompatibility("webm", "vp9", "flac")).toThrow(
       /WebM does not support audio codec "flac"/,
     );
+  });
+});
+
+describe("isLibavTranscodeContainer", () => {
+  // Dispatch gate for the Phase 1 libav-backed transcode path. Only these
+  // three containers go through libav demux + WebCodecs re-encode.
+  it("matches AVI/ASF/FLV", () => {
+    expect(isLibavTranscodeContainer("avi")).toBe(true);
+    expect(isLibavTranscodeContainer("asf")).toBe(true);
+    expect(isLibavTranscodeContainer("flv")).toBe(true);
+  });
+
+  it("does not match mediabunny-native containers (they take the direct path)", () => {
+    expect(isLibavTranscodeContainer("mp4")).toBe(false);
+    expect(isLibavTranscodeContainer("mkv")).toBe(false);
+    expect(isLibavTranscodeContainer("webm")).toBe(false);
+    expect(isLibavTranscodeContainer("mov")).toBe(false);
+    expect(isLibavTranscodeContainer("ogg")).toBe(false);
+    expect(isLibavTranscodeContainer("wav")).toBe(false);
+    expect(isLibavTranscodeContainer("mp3")).toBe(false);
+    expect(isLibavTranscodeContainer("flac")).toBe(false);
+  });
+
+  it("does not (yet) match rm/rmvb — Phase 2 consideration", () => {
+    expect(isLibavTranscodeContainer("rm")).toBe(false);
+    expect(isLibavTranscodeContainer("rmvb")).toBe(false);
   });
 });

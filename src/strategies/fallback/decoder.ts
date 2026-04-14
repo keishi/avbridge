@@ -627,6 +627,10 @@ export async function startDecoder(opts: StartDecoderOptions): Promise<DecoderHa
 // ─────────────────────────────────────────────────────────────────────────────
 // Frame timestamp sanitizer.
 //
+// TODO(libav-demux-migration): sanitizePacketTimestamp / sanitizeFrameTimestamp
+// / libavFrameToInterleavedFloat32 are now in src/util/libav-demux.ts. Migrate
+// when touching the pump for other reasons; see transcode-libav.ts.
+//
 // libav can hand back decoded frames with `pts = AV_NOPTS_VALUE` (encoded as
 // ptshi = -2147483648, pts = 0) for inputs whose demuxer can't determine
 // presentation times. AVI is the canonical example. The bridge's
