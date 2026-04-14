@@ -222,11 +222,25 @@ export class AvbridgePlayerElement extends HTMLElement {
     on(this._playBtn, "click", (e) => { e.stopPropagation(); this._togglePlay(); });
     on(this._overlayBtn, "click", (e) => { e.stopPropagation(); this._togglePlay(); });
 
-    // Seek bar
-    on(this._seekInput, "input", () => this._onSeekInput());
-    on(this._seekInput, "pointerdown", () => { this._userSeeking = true; });
-    on(this._seekInput, "change", () => this._onSeekCommit());
-    on(this._seekInput, "pointermove", (e) => this._onSeekHover(e as PointerEvent));
+    // Seek bar — manual pointer handling so the click position maps
+    // linearly across the FULL track width (native <input type="range">
+    // clamps the thumb center inside [thumbWidth/2, trackWidth -
+    // thumbWidth/2], which causes a visible click-to-thumb offset at
+    // the edges). The input is still used for keyboard accessibility
+    // (arrow keys, home/end) via its 'input' event.
+    on(this._seekInput, "input", () => {
+      // Only accept keyboard-driven input events (not synthesized
+      // from pointer, which we handle manually below).
+      if (this._userSeeking) return;
+      this._onSeekInput();
+    });
+    on(this._seekInput, "change", () => {
+      if (this._userSeeking) return;
+      this._onSeekCommit();
+    });
+    const seekBar = this.shadowRoot!.querySelector(".avp-seek") as HTMLElement;
+    on(seekBar, "pointerdown", (e) => this._onSeekPointerDown(e as PointerEvent));
+    on(seekBar, "pointermove", (e) => this._onSeekHover(e as PointerEvent));
 
     // Volume
     on(this._volumeBtn, "click", (e) => { e.stopPropagation(); this._toggleMute(); });
@@ -339,6 +353,46 @@ export class AvbridgePlayerElement extends HTMLElement {
   private _onSeekCommit(): void {
     this._video.currentTime = Number(this._seekInput.value);
     this._userSeeking = false;
+  }
+
+  /** Linear click-to-time mapping across the full track width (no edge clamping). */
+  private _timeFromSeekPointer(clientX: number): number {
+    const seekBar = this.shadowRoot!.querySelector(".avp-seek") as HTMLElement;
+    const rect = seekBar.getBoundingClientRect();
+    const frac = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+    return frac * (this._video.duration || 0);
+  }
+
+  private _onSeekPointerDown(e: PointerEvent): void {
+    // Ignore synthetic clicks originating from the input's own handling
+    if (e.button !== 0 && e.pointerType === "mouse") return;
+    e.preventDefault();
+    this._userSeeking = true;
+    const seekBar = this.shadowRoot!.querySelector(".avp-seek") as HTMLElement;
+    seekBar.setPointerCapture(e.pointerId);
+
+    const initial = this._timeFromSeekPointer(e.clientX);
+    this._seekInput.value = String(initial);
+    this._onSeekInput();
+
+    const onMove = (ev: PointerEvent) => {
+      const t = this._timeFromSeekPointer(ev.clientX);
+      this._seekInput.value = String(t);
+      this._onSeekInput();
+    };
+    const onUp = (ev: PointerEvent) => {
+      const t = this._timeFromSeekPointer(ev.clientX);
+      this._seekInput.value = String(t);
+      this._onSeekCommit();
+      this._seekInput.focus(); // keep keyboard nav responsive
+      seekBar.removeEventListener("pointermove", onMove);
+      seekBar.removeEventListener("pointerup", onUp);
+      seekBar.removeEventListener("pointercancel", onUp);
+      try { seekBar.releasePointerCapture(e.pointerId); } catch { /* ignore */ }
+    };
+    seekBar.addEventListener("pointermove", onMove);
+    seekBar.addEventListener("pointerup", onUp);
+    seekBar.addEventListener("pointercancel", onUp);
   }
 
   private _onSeekHover(e: PointerEvent): void {

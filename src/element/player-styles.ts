@@ -230,7 +230,10 @@ export const PLAYER_STYLES = /* css */ `
   height: 100%;
   margin: 0;
   opacity: 0;
-  cursor: pointer;
+  /* Disable pointer events — we handle clicks/drags manually on .avp-seek
+   * so the click position maps linearly across the full track width.
+   * The input is still used for keyboard accessibility. */
+  pointer-events: none;
   z-index: 1;
 }
 
