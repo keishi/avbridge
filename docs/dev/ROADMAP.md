@@ -1,6 +1,7 @@
 # avbridge.js — Roadmap
 
-Current release: **v2.2.1** (2026-04-12)
+Current released version: **v2.2.1** (2026-04-12)
+Main branch is ahead with a lot of v2.3-scale work — see below.
 
 ## Project philosophy
 
@@ -15,7 +16,7 @@ avbridge focuses on:
 
 ---
 
-## Completed
+## Released
 
 ### v1.0.0 — Core library + conversion
 
@@ -27,101 +28,116 @@ avbridge focuses on:
 - **Transcode** — WebCodecs re-encoding with quality presets,
   bitrate overrides, resize, frame rate, codec selection
   (H.264/H.265/VP9/AV1 video, AAC/Opus/FLAC audio).
-- **RC pass** — test corpus (5 playback fixtures, 4 conversion smoke
-  tests), bundle audit, README, CHANGELOG.
 
-### v2.0.0 — Web component + element rename
+### v2.0.0 — Web component
 
 - **`<avbridge-video>`** — HTMLMediaElement-compatible custom element
   as `avbridge/element` subpath. Bootstrap token pattern, lifecycle
-  invariants, strict entry isolation. `<avbridge-player>` reserved
-  for future controls-bearing element.
+  invariants, strict entry isolation.
 
-### v2.1.x — Browser bundle + fallback improvements
+### v2.1.x — Browser bundle + fallback polish
 
-- Browser-direct `dist/element-browser.js` with mediabunny +
-  libavjs-webcodecs-bridge inlined.
-- Fallback canvas, remux reseek, mp4v probe, demo libav path
-  resolution.
-- `import.meta.url`-based asset resolution — zero config for
-  bundler consumers, `AVBRIDGE_LIBAV_BASE` override for
-  script-tag / custom hosting.
+- Pre-bundled `dist/element-browser.js` (mediabunny + bridge inlined).
+- `import.meta.url`-based asset resolution (zero config for bundlers,
+  `AVBRIDGE_LIBAV_BASE` for script-tag / custom hosting).
 
 ### v2.2.0 — RealMedia + debug layer
 
 - RealMedia (.rm/.rmvb) playback: rv10-rv40, cook, ra_144/288, sipr,
   atrac3. Routes to fallback WASM strategy.
-- `.RMF` magic byte sniffing, `"rm"` ContainerKind.
-- `src/util/debug.ts` runtime-toggleable verbose logging +
-  unconditional watchdog diagnostics.
+- `src/util/debug.ts` runtime-toggleable verbose logging.
 
 ### v2.2.1 — Strategy-switch fixes
 
-- Canvas renderer `object-fit: contain` for non-stage-aspect content.
-- Remux `setAutoPlay()` so play state survives seek-then-play ordering
-  during strategy switch.
-- Hybrid/fallback patch `target.paused` from audio clock so
-  `doSetStrategy` captures real play state.
-- `buildInitialDecision` filters initial strategy out of inherited
-  fallback chain.
-- `destroy()` removes the `ended` listener attached in `bootstrap()`.
+- Canvas `object-fit: contain`, remux `setAutoPlay`, hybrid/fallback
+  `target.paused` patching, fallback-chain filtering, listener cleanup.
 
 ---
 
-## v2.3.0 — Production readiness
+## Shipped since v2.2.1 (awaiting a version bump)
 
-High-impact, low-risk. Focused on unblocking real-world integrations.
+All of these are on `main` and deployed to the GitHub Pages demo.
 
-### Transport configurability
+### Production-readiness (originally planned v2.3)
 
-**Priority: Critical — required for production use.**
+- **Transport configurability** — `requestInit` / `fetchFn` on
+  `CreatePlayerOptions`, threaded through probe, subtitles, and the
+  libav HTTP reader. Unblocks signed URLs and custom auth.
+- **Bitstream fixups** — `mpeg4_unpack_bframes` BSF wired into
+  fallback + hybrid; Annex B → AVCC normalization in the libav remux
+  path. `bsfApplied` surfaced in diagnostics.
+- **Structured errors** — `AvbridgeError` with machine-readable codes
+  (`ERR_AVBRIDGE_*`) and human-readable recovery hints. Applied to
+  probe, codec, MSE, player-readiness, strategy-exhaustion paths.
+- **GitHub Pages demo** — deployed at keishi.github.io/avbridge via
+  GitHub Actions. COOP/COEP service worker for SharedArrayBuffer.
+  Large-file transcode via `showSaveFilePicker()` + streaming output.
 
-`probe()`, subtitle fetches, and the libav HTTP reader all use bare
-`fetch()`. This breaks signed URLs, auth flows, and any CDN that
-requires custom headers. Affects all strategies.
+### Codec breadth
 
-- Add `requestInit?: RequestInit` and/or `fetchFn?: typeof fetch` to
-  `CreatePlayerOptions`.
-- Thread through `normalizeSource()`, subtitle fetches, and
-  `attachLibavHttpReader()` (which already accepts `requestInit`
-  internally but doesn't surface it).
-- Minor version bump (new public API surface).
+- **DTS, TrueHD, Theora decoders** in the custom libav variant.
+- **Recognition via libav re-probe** when mediabunny returns unknown
+  codecs (DTS in MKV was previously misidentified).
+- **Hybrid routing for native video + fallback audio** — e.g. H.264
+  + DTS now uses WebCodecs hardware video + libav software audio
+  instead of full WASM fallback.
+- **Variant picker rewrite** — allowlist-based (webcodecs-compatible
+  codecs) instead of denylist, so any non-native codec triggers the
+  custom avbridge variant.
 
-### Bitstream fixups (targeted resilience)
+### `<avbridge-player>` — controls-bearing element
 
-**Priority: High — low effort, high ROI.**
+Shipped ahead of schedule (was slated for v3.0). Subpath export at
+`avbridge/player`:
 
-The BSF is already compiled into the custom libav variant; this is
-wiring work, not new capability.
+- Play/pause, seek bar, time display, volume/mute, settings menu,
+  fullscreen, strategy badge (in Stats for Nerds), loading spinner.
+- Settings menu: playback speed, subtitle track, audio track, Stats
+  for Nerds toggle.
+- Auto-hide controls (3s), YouTube-style keyboard shortcuts
+  (space/k, f, m, j/l, ←/→, ↑/↓, `>`/`<`, Esc).
+- Touch gestures: tap-to-toggle-controls, double-tap left/right for
+  ±10s with ripple, tap-and-hold for 2x speed.
+- Seek bar with linear pointer-to-time mapping (no range-input edge
+  clamping). Manual pointer capture for exact click alignment.
+- `::part()` hooks on every control for external styling.
 
-- Wire `mpeg4_unpack_bframes` BSF for packed B-frame DivX files.
-- H.264 Annex B / AVCC normalization where needed.
-- Surface applied fixups in diagnostics
-  (`repairsApplied: ["mpeg4_unpack_bframes"]`).
-- The broad resilience vision (repair modes, degradation strategies,
-  damaged file recovery) stays in a future major version.
+### A/V sync + rendering
 
-### Diagnostics UX
+Documented in `docs/dev/POSTMORTEMS.md`.
 
-**Priority: Medium.**
+- **PTS-based rendering with clock-drift calibration** — video PTS
+  and `AudioContext.currentTime` drift ~7ms/s (different clock
+  domains). Fixed via periodic re-snap every 10s, keeping max drift
+  under 70ms (human lip-sync threshold).
+- **Hybrid audio-first pump ordering** + sub-batch yields during
+  DTS decode to prevent rAF starvation.
+- **Background tab pause/resume** — Chrome throttles rAF/timeouts
+  when hidden; we pause cleanly and resume on visibility return.
+  Configurable via `backgroundBehavior: "pause" | "continue"`.
 
-The debug layer and diagnostics snapshot exist, but failures surface
-as raw error messages or silent fallbacks. Users need to understand
-*why* something didn't play.
+### Testing + docs
 
-- Human-readable failure messages ("codec not supported by this
-  browser", "range requests required for this file size", "libav
-  failed to load — check AVBRIDGE_LIBAV_BASE").
-- Standardized error codes on emitted errors.
-- Mapping from diagnostics state to UI-friendly status strings.
+- **269 unit tests** across 17 files (262 → added visibility state
+  machine tests + AudioOutput contract).
+- **Three testing tiers documented** in `docs/dev/TESTING.md`:
+  unit, browser integration, and strategy-to-element contract.
+- **Puppeteer player-controls contract tests** for the hybrid/fallback
+  + `<avbridge-player>` integration (catches the class of bug where
+  a strategy forgets to preserve HTMLMediaElement events).
+- **Rebrand to avbridge.js** across docs and demo, npm package name
+  unchanged.
 
-### Hosted demo on GitHub Pages
+---
 
-**Priority: Medium.**
+## v2.3.0 — Next release (version bump + publish)
 
-Publish the player + converter demos to `keishi.github.io/avbridge/`
-so users can try avbridge without cloning the repo. Requires a build
-step for `demo/` and a GitHub Actions workflow to deploy on push.
+All the work above is a single coherent release. Remaining to cut it:
+
+- Bump `package.json` to 2.3.0.
+- Consolidated CHANGELOG entry.
+- `npm publish` (user runs — needs OTP).
+- Push tag.
 
 ---
 
@@ -130,63 +146,93 @@ step for `demo/` and a GitHub Actions workflow to deploy on push.
 ### AVI/ASF/FLV transcode input
 
 `transcode()` currently only accepts mediabunny-readable containers
-(MP4/MKV/WebM/OGG/MOV/MP3/FLAC/WAV). Completing the "any format in,
-modern format out" promise requires wiring the libav demux → WebCodecs
-encode path.
+(MP4/MKV/WebM/OGG/MOV/MP3/FLAC/WAV). Wiring the libav demux →
+WebCodecs encode path completes the "any format in, modern format
+out" promise.
 
 ### Multi-audio track selection
 
 - Remux strategy is single-track output (`setAudioTrack` is a no-op).
 - Hybrid/fallback don't expose track selection.
-- `setAudioTrack(id)` API exists on PlaybackSession but only native
-  strategy implements it.
+- `<avbridge-player>` has a UI menu for it (`setAudioTrack(id)` on
+  the element), but the underlying strategies don't honor it.
 - Common in anime, movies, and rips — users expect switching.
 
 ### Buffered ranges for canvas strategies
 
 `<avbridge-video>.buffered` returns empty TimeRanges for hybrid and
-fallback. Synthesizing ranges from the decoder's read position would
-give consumers meaningful buffer state. UX improvement, not
-correctness.
+fallback. Synthesizing ranges from the decoder's read position
+would give consumers meaningful buffer state (and the seek bar's
+"buffered" indicator would actually fill). UX, not correctness.
+
+### Subtitle timeline panel
+
+A separate `<avbridge-subtitles>` or similar element showing subtitle
+cues as a scrollable list with timestamps — click a cue to jump to
+that point. Like YouTube's transcript panel. Needs access to the
+subtitle track cues via the player's text track.
+
+### `<avbridge-player>` polish
+
+- **Typed `addEventListener` overloads** so consumers don't need
+  `as unknown as CustomEvent` casts.
+- **Drag-and-drop file input** on the player area.
+- **Subtitle `<track>` children** parsing (currently only supports
+  `options.subtitles`).
 
 ---
 
 ## v3.0 — Future
 
-### `<avbridge-video>` Phase B
-
-Deferred until the bare element is battle-tested.
-
-- Built-in controls UI (play/pause, seek, time, volume) under the
-  reserved `<avbridge-player>` tag.
-- Diagnostics panel.
-- `<track>` children + audio/subtitle track menus.
-- Drag-and-drop file input.
-- `::part()` styling hooks.
-- Typed `addEventListener` overloads so consumers don't need
-  `as unknown as CustomEvent` casts.
-
 ### Resilience layer
 
-The broad vision from VISION_PLUS.md: repair modes, degradation
-strategies, damaged file recovery. A project of its own.
+The broad vision from `VISION_PLUS.md`: repair modes, degradation
+strategies, damaged file recovery. Targeted bitstream fixups
+(mpeg4_unpack_bframes, Annex B normalization) are already shipped;
+this is the fuller version — repair-mode API, fallback quality
+knobs, error-concealing renderer.
+
+### HDR support
+
+HDR video playback across strategies:
+
+- **Native / remux**: already works if the browser supports the
+  codec (HEVC Main 10, AV1, VP9 Profile 2). No avbridge work needed.
+- **Hybrid**: WebCodecs `VideoFrame.colorSpace` carries HDR metadata,
+  but the canvas renderer draws to the default sRGB context which
+  tone-maps (clamps) HDR content. Needs `canvas.getContext("2d",
+  { colorSpace: "display-p3" })` and possibly `configureHighDynamicRange`.
+- **Fallback**: libav WASM decodes YUV → the renderer converts to RGB
+  assuming SDR. Proper HDR needs PQ (SMPTE ST 2084) / HLG transfer
+  curve handling and wide-gamut color conversion.
+
+Browser HDR canvas support is still evolving (Chrome has `configureHighDynamicRange`
+behind a flag as of early 2026). Track browser progress before investing.
+
+### Subtitle translation
+
+Chrome's built-in Translator API (`self.ai.translator`) can translate
+subtitle text to the user's language. Wire as a progressive
+enhancement in the `<avbridge-player>` settings menu — detect API
+availability and show "Translate to [locale]" when present. No
+server required, runs locally in Chrome.
 
 ### Performance
 
 - OffscreenCanvas / worker rendering.
-- libav.js pthreads (blocked on upstream bug; single-threaded WASM
-  with SIMD for now).
+- libav.js pthreads (blocked on upstream libav.js bug; single-threaded
+  WASM with SIMD for now).
 - HTTP reader LRU cache for re-fetches on seeks.
 
 ---
 
 ## Out of scope
 
-- HLS/DASH/RTSP (adaptive streaming protocols)
+- HLS/DASH/RTSP (adaptive streaming protocols — different problem
+  domain; consider for v4+)
 - DRM / key management
 - MediaStream output (real-time capture)
-- Streaming output (`ReadableStream`) from remux/transcode
-- ASS/SSA subtitles
+- ASS/SSA subtitles (SRT and VTT only)
 
 ---
 
@@ -196,25 +242,31 @@ strategies, damaged file recovery. A project of its own.
 // Playback
 createPlayer(options: CreatePlayerOptions): Promise<UnifiedPlayer>
 
-// Analysis (standalone, no player needed)
-probe(source: MediaInput): Promise<MediaContext>
+// Analysis
+probe(source: MediaInput, transport?: TransportConfig): Promise<MediaContext>
 classify(context: MediaContext): Classification
 
-// Conversion (standalone, no player needed)
+// Conversion
 remux(source: MediaInput, options?: ConvertOptions): Promise<ConvertResult>
 transcode(source: MediaInput, options?: TranscodeOptions): Promise<ConvertResult>
 
 // Utility
 srtToVtt(srt: string): string
+
+// Error handling
+class AvbridgeError extends Error { code: string; recovery?: string }
 ```
 
-Two entry points:
+Three entry points:
 - `avbridge` — core library (probe + classify + player + conversion)
-- `avbridge/element` — `<avbridge-video>` custom element (includes core)
+- `avbridge/element` — `<avbridge-video>` custom element
+- `avbridge/player` — `<avbridge-player>` controls-bearing element
 
 ### Demo apps
 
-- **Player** (`demo/index.html`): file picker, custom controls, strategy
-  badge, manual backend switcher, diagnostics panel.
-- **Converter** (`demo/convert.html`): HandBrake-like UI with
-  container/codec/quality/bitrate/resize options, progress, cancel.
+- **Player** (`demo/index.html`) — `<avbridge-player>` with full
+  controls, mobile support, Stats for Nerds.
+- **Converter** (`demo/convert.html`) — container/codec/quality/
+  bitrate/resize options, streaming output via File System Access API.
+
+Hosted at https://keishi.github.io/avbridge/
