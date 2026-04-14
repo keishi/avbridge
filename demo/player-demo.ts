@@ -48,8 +48,25 @@ function init(player: AvbridgePlayerElement): void {
     } catch { /* element not ready yet */ }
   }, 1000);
 
+  // Track the subtitle file separately so we can pass it when the user
+  // picks a video file.
+  let pendingSubtitle: { url: string; format: "srt" | "vtt"; name: string } | null = null;
+
   subInput.addEventListener("change", () => {
-    console.log("[demo] subtitle selected:", subInput.files?.[0]?.name);
+    // Revoke any previous subtitle blob URL
+    if (pendingSubtitle) {
+      try { URL.revokeObjectURL(pendingSubtitle.url); } catch { /* ignore */ }
+      pendingSubtitle = null;
+    }
+    const f = subInput.files?.[0];
+    if (!f) return;
+    const format = f.name.toLowerCase().endsWith(".srt") ? "srt" : "vtt";
+    pendingSubtitle = {
+      url: URL.createObjectURL(f),
+      format,
+      name: f.name,
+    };
+    console.log("[demo] subtitle queued:", pendingSubtitle);
   });
 
   fileInput.addEventListener("change", async () => {
@@ -58,6 +75,11 @@ function init(player: AvbridgePlayerElement): void {
     if (!file) return;
 
     try {
+      // Pass subtitles via the element — must be set BEFORE source so
+      // the bootstrap picks them up.
+      (player as unknown as { subtitles: unknown }).subtitles = pendingSubtitle
+        ? [{ url: pendingSubtitle.url, format: pendingSubtitle.format }]
+        : null;
       player.source = file;
       await player.play();
     } catch (err) {

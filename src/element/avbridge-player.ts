@@ -824,6 +824,17 @@ export class AvbridgePlayerElement extends HTMLElement {
   get strategyClass(): string | undefined { return this._video.strategyClass ?? undefined; }
   get audioTracks(): unknown[] { return this._video.audioTracks ?? []; }
   get subtitleTracks(): unknown[] { return this._video.subtitleTracks ?? []; }
+
+  /**
+   * External subtitle files to attach when the source loads. Forwarded
+   * to the inner <avbridge-video>. Takes effect on next bootstrap.
+   */
+  get subtitles(): unknown {
+    return (this._video as unknown as { subtitles: unknown }).subtitles;
+  }
+  set subtitles(value: unknown) {
+    (this._video as unknown as { subtitles: unknown }).subtitles = value;
+  }
   get player(): unknown { return this._video.player; }
   get videoElement(): HTMLVideoElement { return this._video.videoElement; }
 

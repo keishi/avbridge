@@ -1,4 +1,5 @@
 import type { ClockSource } from "./audio-output.js";
+import { SubtitleOverlay } from "../../subtitles/render.js";
 
 /**
  * Renders decoded `VideoFrame`s into a 2D canvas overlaid on the user's
@@ -46,6 +47,16 @@ export class VideoRenderer {
   private ticksWaiting = 0;
   /** Cumulative count of ticks where PTS mode painted a frame. */
   private ticksPainted = 0;
+
+  /**
+   * Subtitle overlay div attached to the stage wrapper alongside the
+   * canvas. Created lazily when subtitle tracks are attached via the
+   * target's `<track>` children. Canvas strategies (hybrid, fallback)
+   * hide the <video>, so we can't rely on the browser's native cue
+   * rendering; we read TextTrack.cues and render into this overlay.
+   */
+  private subtitleOverlay: SubtitleOverlay | null = null;
+  private subtitleTrack: TextTrack | null = null;
 
   /**
    * Calibration offset (microseconds) between video PTS and audio clock.
@@ -111,6 +122,15 @@ export class VideoRenderer {
     }
     target.style.visibility = "hidden";
 
+    // Create a subtitle overlay on the same parent as the canvas so cues
+    // appear over the rendered video. Shows nothing until a TextTrack
+    // gets attached via attachSubtitleTracks.
+    const overlayParent = parent instanceof HTMLElement ? parent : document.body;
+    this.subtitleOverlay = new SubtitleOverlay(overlayParent);
+    // Watch for <track> children on the target <video>. When one is
+    // added, grab its TextTrack and poll cues from it each tick.
+    this.watchTextTracks(target);
+
     const ctx = this.canvas.getContext("2d");
     if (!ctx) throw new Error("video renderer: failed to acquire 2D context");
     this.ctx = ctx;
@@ -156,9 +176,54 @@ export class VideoRenderer {
     }
   }
 
+  /**
+   * Watch the target <video>'s textTracks list. When a track is added,
+   * grab it and start polling cues on each render tick. Existing tracks
+   * (if any) are picked up immediately.
+   */
+  private watchTextTracks(target: HTMLVideoElement): void {
+    const pick = () => {
+      if (this.subtitleTrack) return;
+      const tracks = target.textTracks;
+      for (let i = 0; i < tracks.length; i++) {
+        const t = tracks[i];
+        if (t.kind === "subtitles" || t.kind === "captions") {
+          this.subtitleTrack = t;
+          t.mode = "hidden"; // hidden means "cues available via API, don't render"
+          break;
+        }
+      }
+    };
+    pick();
+    if (typeof target.textTracks.addEventListener === "function") {
+      target.textTracks.addEventListener("addtrack", pick);
+    }
+  }
+
+  /** Find the active cue (if any) for the given media time. */
+  private updateSubtitles(): void {
+    if (!this.subtitleOverlay || !this.subtitleTrack) return;
+    const cues = this.subtitleTrack.cues;
+    if (!cues || cues.length === 0) return;
+    const t = this.clock.now();
+    let activeText = "";
+    for (let i = 0; i < cues.length; i++) {
+      const c = cues[i];
+      if (t >= c.startTime && t <= c.endTime) {
+        const vttCue = c as VTTCue & { text?: string };
+        activeText = vttCue.text ?? "";
+        break;
+      }
+    }
+    // Strip VTT tags for plain rendering (e.g. <c.en> voice tags)
+    this.subtitleOverlay.setText(activeText.replace(/<[^>]+>/g, ""));
+  }
+
   private tick(): void {
     if (this.destroyed) return;
     this.rafHandle = requestAnimationFrame(this.tick);
+
+    this.updateSubtitles();
 
     if (this.queue.length === 0) return;
 
@@ -331,6 +396,8 @@ export class VideoRenderer {
     this.destroyed = true;
     if (this.rafHandle != null) cancelAnimationFrame(this.rafHandle);
     this.flush();
+    if (this.subtitleOverlay) { this.subtitleOverlay.destroy(); this.subtitleOverlay = null; }
+    this.subtitleTrack = null;
     this.canvas.remove();
     this.target.style.visibility = "";
   }

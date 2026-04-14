@@ -148,6 +148,14 @@ export class AvbridgeVideoElement extends HTMLElementCtor {
   private _subtitleTracks: SubtitleTrackInfo[] = [];
 
   /**
+   * External subtitle list forwarded to `createPlayer()` on the next
+   * bootstrap. Setting this after bootstrap queues it for the next
+   * source change; consumers that need to swap subtitles mid-playback
+   * should set `source` to reload.
+   */
+  private _subtitles: Array<{ url: string; language?: string; format?: "vtt" | "srt" }> | null = null;
+
+  /**
    * Initial strategy preference. `"auto"` means "let the classifier decide";
    * any other value is passed to `createPlayer({ initialStrategy })` and
    * skips classification on the next bootstrap. Note that this only affects
@@ -358,6 +366,7 @@ export class AvbridgeVideoElement extends HTMLElementCtor {
         ...(this._preferredStrategy !== "auto"
           ? { initialStrategy: this._preferredStrategy }
           : {}),
+        ...(this._subtitles ? { subtitles: this._subtitles } : {}),
       });
     } catch (err) {
       // Stale or destroyed — silently abandon.
@@ -707,6 +716,23 @@ export class AvbridgeVideoElement extends HTMLElementCtor {
 
   get subtitleTracks(): SubtitleTrackInfo[] {
     return this._subtitleTracks;
+  }
+
+  /**
+   * External subtitle files to attach when the source loads. Takes effect
+   * on the next bootstrap — set before assigning `source`, or reload via
+   * `load()` after changing.
+   *
+   * @example
+   * el.subtitles = [{ url: "/en.srt", format: "srt", language: "en" }];
+   * el.src = "/movie.mp4";
+   */
+  get subtitles(): Array<{ url: string; language?: string; format?: "vtt" | "srt" }> | null {
+    return this._subtitles;
+  }
+
+  set subtitles(value: Array<{ url: string; language?: string; format?: "vtt" | "srt" }> | null) {
+    this._subtitles = value;
   }
 
   // ── Public methods ─────────────────────────────────────────────────────

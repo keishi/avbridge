@@ -32,6 +32,14 @@ export class SubtitleOverlay {
     this.el.textContent = active?.text ?? "";
   }
 
+  /** Set the currently-displayed text directly (bypasses loadVtt/update). */
+  setText(text: string): void {
+    // Only touch the DOM if it actually changed — rAF tick runs 60Hz.
+    if (this.el.textContent !== text) {
+      this.el.textContent = text;
+    }
+  }
+
   destroy(): void {
     this.el.remove();
     this.cues = [];

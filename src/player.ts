@@ -147,22 +147,21 @@ export class UnifiedPlayer {
       // Try the primary strategy, falling through the chain on failure
       await this.startSession(decision.strategy, decision.reason);
 
-      // Apply subtitles for non-canvas strategies. Per-track failures are
-      // caught inside attachSubtitleTracks and logged via console.warn —
-      // subtitles are not load-bearing, so a bad sidecar must not break
-      // bootstrap.
-      if (this.session!.strategy !== "fallback" && this.session!.strategy !== "hybrid") {
-        await attachSubtitleTracks(
-          this.options.target,
-          ctx.subtitleTracks,
-          this.subtitleResources,
-          (err, track) => {
-            // eslint-disable-next-line no-console
-            console.warn(`[avbridge] subtitle ${track.id} failed: ${err.message}`);
-          },
-          this.transport,
-        );
-      }
+      // Apply subtitles for all strategies. Native/remux render them via
+      // the inner <video>'s native text-track engine. Hybrid/fallback
+      // hide the <video> and render cues into the canvas overlay — see
+      // each session's SubtitleOverlay wiring. The <track> elements are
+      // attached in both cases so cues are parsed by the browser.
+      await attachSubtitleTracks(
+        this.options.target,
+        ctx.subtitleTracks,
+        this.subtitleResources,
+        (err, track) => {
+          // eslint-disable-next-line no-console
+          console.warn(`[avbridge] subtitle ${track.id} failed: ${err.message}`);
+        },
+        this.transport,
+      );
 
       this.emitter.emitSticky("tracks", {
         video: ctx.videoTracks,
