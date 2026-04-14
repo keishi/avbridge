@@ -9,8 +9,36 @@ Test at the layer where a bug would actually manifest:
 - **Playback behavior** (A/V sync, MSE backpressure, canvas rendering,
   stall detection) is timing-sensitive and browser-dependent — test it
   in headless Chromium via Puppeteer.
+- **Contracts between components** (strategy ↔ element, session ↔
+  renderer) break silently when one side changes without the other.
+  Test the observable contract, not the wiring.
 - **Don't chase coverage %** — add tests where a bug would be hard to
   spot manually or easy to reintroduce during refactors.
+
+## The strategy-to-element contract
+
+Strategy sessions (native/remux/hybrid/fallback) must preserve the
+observable `HTMLMediaElement` contract on the target `<video>` element.
+This matters because `<avbridge-video>` and `<avbridge-player>` both
+expose standard HTML media properties (`paused`, `volume`, `muted`,
+`currentTime`) and emit standard media events (`play`, `pause`,
+`volumechange`, `timeupdate`).
+
+For strategies that DON'T render into the real `<video>` (hybrid and
+fallback both hide it and use a canvas + Web Audio), the inner video
+never plays on its own. The strategy is responsible for:
+
+1. Patching getter/setter properties on the target so `.paused`,
+   `.volume`, `.muted`, `.currentTime` return meaningful values.
+2. Dispatching the corresponding events (`play`, `pause`,
+   `playing`, `volumechange`) when state changes.
+
+Without this contract, `<avbridge-player>`'s controls UI shows stale
+state — the play button doesn't update when audio starts, mute
+doesn't silence output. This class of bug is invisible to both unit
+tests (jsdom can't run WebCodecs/Web Audio) and generic playback
+smoke tests (which only check that frames render). It's caught by
+**Tier 2b** below, which specifically exercises the contract.
 
 ---
 
@@ -20,7 +48,7 @@ Test at the layer where a bug would actually manifest:
 npm test
 ```
 
-**199 tests** across 14 test files. Runs in ~2 seconds with no
+**262 tests** across 17 test files. Runs in ~2 seconds with no
 browser. These are the gate — every commit must pass.
 
 ### What's covered
@@ -85,6 +113,29 @@ Can also point at arbitrary files or directories:
 ```bash
 npm run test:playback -- /path/to/media/dir --duration 5
 ```
+
+### Controls contract tests
+
+```bash
+npm run test:player-controls
+```
+
+Exercises the `<avbridge-player>` UI against hybrid and fallback
+fixtures — the two strategies where the inner `<video>` is hidden
+and playback is driven by Web Audio. Verifies:
+
+- `play()` / `pause()` dispatch the right events → play button icon
+  toggles in the shadow DOM
+- `volume` / `muted` setters route through the audio output's
+  GainNode → volume slider + mute icon reflect the state
+- Clicking the shadow DOM play button toggles playback
+- `paused` getter reflects the real audio clock state
+
+Catches the **strategy-to-element contract** bugs described above —
+bugs that neither unit tests nor playback smoke tests can see, because
+they only manifest when an HTMLMediaElement consumer (like the
+controls UI) queries the target's properties or listens for standard
+events.
 
 ### Conversion smoke tests
 
