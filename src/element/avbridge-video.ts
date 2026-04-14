@@ -721,7 +721,8 @@ export class AvbridgeVideoElement extends HTMLElementCtor {
   /**
    * External subtitle files to attach when the source loads. Takes effect
    * on the next bootstrap — set before assigning `source`, or reload via
-   * `load()` after changing.
+   * `load()` after changing. For dynamic post-bootstrap addition, use
+   * `addSubtitle()` instead.
    *
    * @example
    * el.subtitles = [{ url: "/en.srt", format: "srt", language: "en" }];
@@ -733,6 +734,33 @@ export class AvbridgeVideoElement extends HTMLElementCtor {
 
   set subtitles(value: Array<{ url: string; language?: string; format?: "vtt" | "srt" }> | null) {
     this._subtitles = value;
+  }
+
+  /**
+   * Attach a subtitle track to the current playback without rebuilding
+   * the player. Works while the element is playing — converts SRT to
+   * VTT if needed, adds a `<track>` to the inner `<video>`. Canvas
+   * strategies pick up the new track via their textTracks watcher.
+   */
+  async addSubtitle(subtitle: { url: string; language?: string; format?: "vtt" | "srt" }): Promise<void> {
+    const { attachSubtitleTracks } = await import("../subtitles/index.js");
+    const format = subtitle.format ?? (subtitle.url.endsWith(".srt") ? "srt" : "vtt");
+    const track = {
+      id: this._subtitleTracks.length,
+      format,
+      language: subtitle.language,
+      sidecarUrl: subtitle.url,
+    };
+    this._subtitleTracks.push(track);
+    await attachSubtitleTracks(
+      this._videoEl,
+      this._subtitleTracks,
+      undefined,
+      (err, t) => {
+        // eslint-disable-next-line no-console
+        console.warn(`[avbridge] subtitle ${t.id} failed: ${err.message}`);
+      },
+    );
   }
 
   // ── Public methods ─────────────────────────────────────────────────────

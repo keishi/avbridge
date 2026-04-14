@@ -835,6 +835,11 @@ export class AvbridgePlayerElement extends HTMLElement {
   set subtitles(value: unknown) {
     (this._video as unknown as { subtitles: unknown }).subtitles = value;
   }
+
+  /** Attach a subtitle track to the current playback without a reload. */
+  async addSubtitle(subtitle: { url: string; language?: string; format?: "vtt" | "srt" }): Promise<void> {
+    return (this._video as unknown as { addSubtitle: (s: unknown) => Promise<void> }).addSubtitle(subtitle);
+  }
   get player(): unknown { return this._video.player; }
   get videoElement(): HTMLVideoElement { return this._video.videoElement; }
 

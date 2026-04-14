@@ -52,7 +52,7 @@ function init(player: AvbridgePlayerElement): void {
   // picks a video file.
   let pendingSubtitle: { url: string; format: "srt" | "vtt"; name: string } | null = null;
 
-  subInput.addEventListener("change", () => {
+  subInput.addEventListener("change", async () => {
     // Revoke any previous subtitle blob URL
     if (pendingSubtitle) {
       try { URL.revokeObjectURL(pendingSubtitle.url); } catch { /* ignore */ }
@@ -67,6 +67,18 @@ function init(player: AvbridgePlayerElement): void {
       name: f.name,
     };
     console.log("[demo] subtitle queued:", pendingSubtitle);
+
+    // If a video is already loaded, attach the subtitle dynamically.
+    // Otherwise it'll be picked up on the next source change.
+    if (player.source || player.src) {
+      try {
+        await (player as unknown as { addSubtitle: (s: unknown) => Promise<void> })
+          .addSubtitle({ url: pendingSubtitle.url, format });
+        console.log("[demo] subtitle attached dynamically");
+      } catch (err) {
+        showError(`subtitle attach failed: ${(err as Error).message}`);
+      }
+    }
   });
 
   fileInput.addEventListener("change", async () => {

@@ -185,26 +185,66 @@ export class VideoRenderer {
     const pick = () => {
       if (this.subtitleTrack) return;
       const tracks = target.textTracks;
+      if (isDebug()) {
+        // eslint-disable-next-line no-console
+        console.log(`[avbridge:subs] watchTextTracks pick() — ${tracks.length} tracks`);
+      }
       for (let i = 0; i < tracks.length; i++) {
         const t = tracks[i];
+        if (isDebug()) {
+          // eslint-disable-next-line no-console
+          console.log(`[avbridge:subs] track ${i}: kind=${t.kind} mode=${t.mode} cues=${t.cues?.length ?? 0}`);
+        }
         if (t.kind === "subtitles" || t.kind === "captions") {
           this.subtitleTrack = t;
           t.mode = "hidden"; // hidden means "cues available via API, don't render"
+          if (isDebug()) {
+            // eslint-disable-next-line no-console
+            console.log(`[avbridge:subs] picked track, mode=hidden`);
+          }
+          // Listen for cue load completion
+          const trackEl = target.querySelector(`track[srclang="${t.language}"]`) as HTMLTrackElement | null;
+          if (trackEl) {
+            trackEl.addEventListener("load", () => {
+              if (isDebug()) {
+                // eslint-disable-next-line no-console
+                console.log(`[avbridge:subs] track element loaded, cues=${t.cues?.length ?? 0}`);
+              }
+            });
+            trackEl.addEventListener("error", (ev) => {
+              // eslint-disable-next-line no-console
+              console.warn(`[avbridge:subs] track element error:`, ev);
+            });
+          }
           break;
         }
       }
     };
     pick();
     if (typeof target.textTracks.addEventListener === "function") {
-      target.textTracks.addEventListener("addtrack", pick);
+      target.textTracks.addEventListener("addtrack", (e) => {
+        if (isDebug()) {
+          // eslint-disable-next-line no-console
+          console.log("[avbridge:subs] addtrack event fired");
+        }
+        void e;
+        pick();
+      });
     }
   }
+
+  private _loggedCues = false;
 
   /** Find the active cue (if any) for the given media time. */
   private updateSubtitles(): void {
     if (!this.subtitleOverlay || !this.subtitleTrack) return;
     const cues = this.subtitleTrack.cues;
     if (!cues || cues.length === 0) return;
+    if (isDebug() && !this._loggedCues) {
+      this._loggedCues = true;
+      // eslint-disable-next-line no-console
+      console.log(`[avbridge:subs] cues available: ${cues.length}, first start=${cues[0].startTime}, last end=${cues[cues.length-1].endTime}`);
+    }
     const t = this.clock.now();
     let activeText = "";
     for (let i = 0; i < cues.length; i++) {
