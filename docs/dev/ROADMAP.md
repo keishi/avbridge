@@ -1,6 +1,6 @@
 # avbridge.js — Roadmap
 
-Current released version: **v2.6.0** (2026-04-14)
+Current released version: **v2.7.0** (2026-04-14)
 
 ## Positioning
 
@@ -189,6 +189,25 @@ Released 2026-04-14. Consumer ergonomics upgrade.
   truthful values on canvas strategies. `buffered` + `networkState`
   still deferred.
 
+### v2.7.0 — Cross-browser strategy validation
+
+Released 2026-04-14. No runtime code changes — a confidence release.
+
+- **Playwright-based Tier 4** in the testing model, running across
+  Chromium, Firefox, and WebKit. First slice `fixtures.spec.ts`
+  validates `probe()` + `classify()` output per fixture per browser
+  (15 tests, ~11s).
+- **Per-browser expectation matrix** at `tests/browser/_expectations.ts` —
+  single source of truth; when browsers evolve, one file changes.
+- **Harness page** `demo/tests-harness.html` exposes the avbridge API
+  on `window` for `page.evaluate()`. Dev-only.
+- **HEVC fixture** `bbb-hevc-aac.mkv` added to the corpus via
+  `scripts/generate-fixtures.mjs`.
+- **Architectural finding**: `classify()` is deliberately
+  browser-independent for most paths. Per-browser divergence lives in
+  the runtime escalation layer — which tests in the `playback.spec.ts`
+  follow-up (v2.7.1) will validate.
+
 ---
 
 ## Near term — ergonomics + confidence
@@ -209,21 +228,21 @@ children, `readyState` + `seekable` for canvas strategies. Still TODO:
   trivially; canvas strategies would need OffscreenCanvas or a captured
   MediaStream).
 
-### Cross-browser testing
+### Cross-browser testing follow-ups (v2.7.x)
 
-Add a Playwright-based matrix covering Chromium, Firefox, and WebKit.
-Test first:
+Tier 4 Playwright infrastructure shipped in v2.7.0 with the
+strategy-decision slice. Next slices fill in the runtime side of the
+same matrix:
 
-- Native MP4, remux MKV, custom element lifecycle.
-- Play/pause/seek/mute/volume parity across strategies.
-- Strategy-choice-per-browser (e.g. HEVC via native on Safari, remux
-  elsewhere).
+- **v2.7.1 — `playback.spec.ts`**: bootstrap → play → destroy per
+  fixture per browser. Catches runtime escalation (Firefox escalating
+  HEVC MKV from remux → fallback when MSE rejects hevc1.*).
+- **v2.7.2 — `contract.spec.ts`**: HTMLMediaElement event + property
+  parity across strategies and browsers.
 
-Then capability-gate: hybrid, fallback, transcode, PiP.
-
-Goal isn't "every browser supports everything" — it's
-**avbridge chooses the correct strategy and degrades correctly on
-each browser**.
+Goal across the whole tier is the same: **avbridge chooses the correct
+strategy and degrades correctly on each browser** — not "every browser
+supports everything."
 
 ### Dogfood in the explorer
 

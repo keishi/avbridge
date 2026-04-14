@@ -4,26 +4,49 @@ All notable changes to **avbridge.js** are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [2.7.0]
+
+Cross-browser confidence release. A Playwright-based test tier now
+validates that avbridge picks the right strategy on each major browser
+engine. No runtime code changes — the release is tooling, fixtures, and
+a new testing discipline.
 
 ### Added
 
 - **Cross-browser test tier (Playwright).** New `tests/browser/` directory
   with the matrix run via `npm run test:browser` across Chromium, Firefox,
-  and WebKit. First slice — `fixtures.spec.ts` — validates that `probe()`
+  and WebKit. Initial slice — `fixtures.spec.ts` — validates that `probe()`
   and `classify()` produce the expected output for each fixture on each
-  browser. Per-browser expectations live in `tests/browser/_expectations.ts`
-  so evolving browser codec support is a one-file change. Playwright's
-  `webServer` config auto-starts Vite; the five existing Puppeteer scripts
-  are unchanged and continue to cover Chromium-only scenarios.
-  Follow-up slices (`playback.spec.ts`, `contract.spec.ts`) land in
-  separate commits.
+  browser (15 tests, ~11s). Per-browser expectations live in
+  `tests/browser/_expectations.ts` so evolving browser codec support is
+  a one-file change. Playwright's `webServer` config auto-starts Vite;
+  the five existing Puppeteer scripts are unchanged and continue to
+  cover Chromium-only scenarios. `npm run test:browser:ui` for the
+  interactive trace viewer.
 - New test harness page at `demo/tests-harness.html` that exposes the
   avbridge API on `window` for `page.evaluate()`-style tests. Only served
   in dev mode; not shipped in production builds.
 - New fixture: `bbb-hevc-aac.mkv` (generated via `npm run fixtures`) for
-  exercising the HEVC native/hybrid/fallback strategy boundary across
-  browsers.
+  exercising the HEVC strategy boundary across browsers.
+- `docs/dev/TESTING.md` — documents the new Tier 4 alongside the
+  existing three tiers, with scope guidance (what belongs in `fixtures`,
+  `playback`, and `contract` spec files).
+
+### Findings worth surfacing
+
+- `classify()` is deliberately **browser-independent** for most codec
+  paths. Per-browser divergence surfaces at runtime via escalation, not
+  at classification. The test-tier split reflects this architecture:
+  `fixtures.spec.ts` for the deterministic decision, `playback.spec.ts`
+  (planned v2.7.1) for runtime escalation behavior.
+
+### Coming in follow-ups
+
+- **v2.7.1** — `playback.spec.ts`. Bootstrap → play → destroy per
+  fixture per browser. Catches runtime escalation (e.g. Firefox
+  escalating HEVC MKV from remux → fallback when MSE rejects hevc1.*).
+- **v2.7.2** — `contract.spec.ts`. HTMLMediaElement event + property
+  parity across strategies and browsers.
 
 ## [2.6.0]
 
