@@ -197,6 +197,50 @@ export const PLAYER_STYLES = /* css */ `
 
 :host([data-controls-hidden]) { cursor: none; }
 
+/* ── Top toolbar (slotted consumer chrome) ─────────────────────────────
+   Two named slots (top-left, top-right) let consumers place back / title /
+   translate buttons inside the auto-hide chrome. Wrapper has
+   pointer-events:none so empty slots don't block container clicks; each
+   side re-enables pointer-events so real buttons remain interactive. */
+
+.avp-toolbar-top {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 5;
+  padding: 8px 12px 24px;
+  background: linear-gradient(rgba(0, 0, 0, 0.6), transparent);
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  opacity: 1;
+  pointer-events: none;
+  transition: opacity 0.25s;
+}
+
+.avp-toolbar-top-left,
+.avp-toolbar-top-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  pointer-events: auto;
+}
+
+.avp-toolbar-top-right { margin-left: auto; }
+
+/* Hide the gradient band when no consumer has slotted anything — we
+   toggle data-toolbar-empty from JS via slotchange. */
+:host([data-toolbar-empty]) .avp-toolbar-top {
+  background: none;
+}
+
+:host([data-controls-hidden]) .avp-toolbar-top {
+  opacity: 0;
+  pointer-events: none;
+}
+
 /* ── Seek bar ─────────────────────────────────────────────────────────── */
 
 .avp-seek {

@@ -58,6 +58,7 @@ const FORWARDED_EVENTS = [
 const PROXY_ATTRIBUTES = [
   "src", "autoplay", "muted", "loop", "preload", "poster",
   "playsinline", "crossorigin", "disableremoteplayback", "preferstrategy",
+  "fit",
 ] as const;
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -132,6 +133,17 @@ export class AvbridgePlayerElement extends HTMLElement {
     this._rippleLeft = shadow.querySelector(".avp-ripple-left") as HTMLDivElement;
     this._rippleRight = shadow.querySelector(".avp-ripple-right") as HTMLDivElement;
 
+    // Track whether the top toolbar has any slotted content. Used to hide
+    // its gradient when empty (see data-toolbar-empty in player-styles.ts).
+    const slots = shadow.querySelectorAll<HTMLSlotElement>('slot[name="top-left"], slot[name="top-right"]');
+    const updateToolbarEmpty = () => {
+      const hasContent = Array.from(slots).some((s) => s.assignedNodes({ flatten: true }).length > 0);
+      if (hasContent) this.removeAttribute("data-toolbar-empty");
+      else this.setAttribute("data-toolbar-empty", "");
+    };
+    updateToolbarEmpty();
+    for (const s of slots) s.addEventListener("slotchange", updateToolbarEmpty);
+
     this._bindEvents();
   }
 
@@ -139,6 +151,10 @@ export class AvbridgePlayerElement extends HTMLElement {
     return `
 <div part="container" class="avp">
   <avbridge-video part="video"></avbridge-video>
+  <div part="toolbar-top" class="avp-toolbar-top">
+    <div part="toolbar-top-left" class="avp-toolbar-top-left"><slot name="top-left"></slot></div>
+    <div part="toolbar-top-right" class="avp-toolbar-top-right"><slot name="top-right"></slot></div>
+  </div>
   <div part="overlay" class="avp-overlay">
     <button class="avp-overlay-btn" aria-label="Play">${ICON_PLAY}</button>
     <div class="avp-spinner"></div>
@@ -326,17 +342,20 @@ export class AvbridgePlayerElement extends HTMLElement {
 
     // Keyboard
     on(this, "keydown", (e) => this._onKeydown(e as KeyboardEvent));
-
-    // Make focusable for keyboard events
-    if (!this.hasAttribute("tabindex")) {
-      this.setAttribute("tabindex", "0");
-    }
   }
 
   // ── Lifecycle ──────────────────────────────────────────────────────────
 
   connectedCallback(): void {
     this._setState("idle");
+    // Make focusable for keyboard events. Must be deferred to
+    // connectedCallback — the Custom Elements spec forbids constructors
+    // from adding attributes (document.createElement rejects with
+    // "The result must not have attributes"), which the Playwright
+    // cross-browser tests caught.
+    if (!this.hasAttribute("tabindex")) {
+      this.setAttribute("tabindex", "0");
+    }
   }
 
   disconnectedCallback(): void {
@@ -649,9 +668,21 @@ export class AvbridgePlayerElement extends HTMLElement {
   /** Track whether the last interaction was touch so click handler can skip. */
   private _lastPointerTypeWasTouch = false;
 
+  /** True if the event's composed path passes through consumer-slotted toolbar
+   *  content. Slotted content lives in the light DOM so `.closest(".avp-toolbar-top")`
+   *  on the event target won't find the shadow-DOM wrapper — `composedPath()`
+   *  does. */
+  private _isToolbarEvent(e: Event): boolean {
+    for (const node of e.composedPath()) {
+      if (node instanceof HTMLElement && node.classList.contains("avp-toolbar-top")) return true;
+    }
+    return false;
+  }
+
   private _onContainerClick(e: MouseEvent): void {
     // Ignore clicks on controls
     if ((e.target as HTMLElement).closest?.(".avp-controls, .avp-settings, .avp-overlay-btn")) return;
+    if (this._isToolbarEvent(e)) return;
 
     // Touch taps are handled by _onPointerUp (show/hide controls + double-tap).
     // The browser fires a synthetic click after touchend — skip it.
@@ -670,6 +701,7 @@ export class AvbridgePlayerElement extends HTMLElement {
 
   private _onContainerDblClick(e: MouseEvent): void {
     if ((e.target as HTMLElement).closest?.(".avp-controls, .avp-settings")) return;
+    if (this._isToolbarEvent(e)) return;
     // Cancel the pending single-click play/pause
     if (this._tapTimer) { clearTimeout(this._tapTimer); this._tapTimer = null; }
     this._toggleFullscreen();
@@ -695,6 +727,7 @@ export class AvbridgePlayerElement extends HTMLElement {
 
     // Ignore touches on controls — buttons have their own handlers
     if ((e.target as HTMLElement).closest?.(".avp-controls, .avp-settings, .avp-overlay-btn")) return;
+    if (this._isToolbarEvent(e)) return;
 
     // Double-tap detection
     const now = Date.now();

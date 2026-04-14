@@ -329,6 +329,29 @@ automatically via `import.meta.url` in the generated chunk.
 <avbridge-video src="/video.mkv" autoplay playsinline></avbridge-video>
 ```
 
+**Two elements ship.** `<avbridge-video>` is the bare
+`HTMLMediaElement`-compatible primitive with zero UI; `<avbridge-player>`
+(from `avbridge/player-element`) wraps it with YouTube-style chrome.
+Both support:
+
+- `fit="contain|cover|fill"` — how the video fills the element's box
+  (maps to `object-fit`; default `contain`). Fires a `fitchange` event.
+- `no-orientation-lock` — opt out of the default behavior that locks
+  `screen.orientation` to the video's intrinsic aspect on fullscreen
+  entry (landscape video → landscape, portrait video → portrait). Safe
+  on iOS / desktop — the lock call is swallowed where unsupported.
+
+`<avbridge-player>` also exposes `top-left` and `top-right` slots
+inside its auto-hiding top chrome for consumer buttons (back, title,
+translate, etc.):
+
+```html
+<avbridge-player src="/video.mkv" fit="cover">
+  <button slot="top-left">← Back</button>
+  <button slot="top-right">Translate</button>
+</avbridge-player>
+```
+
 This is a second tsup entry (`dist/element-browser.js`) that inlines
 mediabunny + libavjs-webcodecs-bridge into a single ~1.3 MB file with
 zero bare specifiers at runtime. Perfect for self-hosted tools or static

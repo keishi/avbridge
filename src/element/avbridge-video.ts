@@ -10,8 +10,9 @@
  *   3. Give consumers a `<video>`-compatible primitive they can wrap with
  *      their own UI.
  *
- * **It is not a player UI framework.** The tag name `<avbridge-player>` is
- * reserved for a future controls-bearing element. See
+ * **It is not a player UI framework.** For YouTube-style chrome (seek
+ * bar, play/pause, settings menu, fullscreen, auto-hiding controls) use
+ * `<avbridge-player>` — it wraps this element with a full UI. See
  * `docs/dev/WEB_COMPONENT_SPEC.md` for the full spec, lifecycle invariants,
  * and edge case list.
  */
@@ -37,6 +38,11 @@ const PREFERRED_STRATEGY_VALUES = new Set<PreferredStrategy>([
   "hybrid",
   "fallback",
 ]);
+
+/** Fit mode — how the video fills the element's box. Mirrors CSS object-fit. */
+type FitMode = "contain" | "cover" | "fill";
+const FIT_VALUES = new Set<FitMode>(["contain", "cover", "fill"]);
+const DEFAULT_FIT: FitMode = "contain";
 
 /**
  * Standard `HTMLMediaElement` events we forward from the inner `<video>`
@@ -110,6 +116,8 @@ export class AvbridgeVideoElement extends HTMLElementCtor {
     "disableremoteplayback",
     "diagnostics",
     "preferstrategy",
+    "fit",
+    "no-orientation-lock",
   ];
 
   // ── Internal state ─────────────────────────────────────────────────────
@@ -172,6 +180,14 @@ export class AvbridgeVideoElement extends HTMLElementCtor {
    */
   private _preferredStrategy: PreferredStrategy = "auto";
 
+  /** Current fit mode. Applied to the inner `<video>` via object-fit, and
+   *  to the fallback canvas via the `--avbridge-fit` CSS custom property on
+   *  the stage wrapper (see `src/strategies/fallback/video-renderer.ts`). */
+  private _fit: FitMode = DEFAULT_FIT;
+  /** The stage wrapper — the element the canvas attaches into, and where
+   *  the `--avbridge-fit` CSS custom property lives. */
+  private _stageEl!: HTMLDivElement;
+
   /** Set if currentTime was assigned before the player was ready. */
   private _pendingSeek: number | null = null;
   /** Set if play() was called before the player was ready. */
@@ -179,6 +195,14 @@ export class AvbridgeVideoElement extends HTMLElementCtor {
 
   /** MutationObserver tracking light-DOM `<track>` children. */
   private _trackObserver: MutationObserver | null = null;
+
+  /** Document-level fullscreenchange handler — installed while connected so
+   *  the element can lock/unlock screen orientation to match the video's
+   *  intrinsic aspect. */
+  private _fullscreenChangeHandler: (() => void) | null = null;
+  /** True if we successfully called screen.orientation.lock() on the last
+   *  fullscreen entry. Used to know whether to unlock on exit. */
+  private _orientationLocked = false;
 
   // ── Construction & lifecycle ───────────────────────────────────────────
 
@@ -193,12 +217,13 @@ export class AvbridgeVideoElement extends HTMLElementCtor {
     // not an Element) and the canvas would never attach to the DOM.
     const stage = document.createElement("div");
     stage.setAttribute("part", "stage");
-    stage.style.cssText = "position:relative;width:100%;height:100%;display:block;";
+    stage.style.cssText = `position:relative;width:100%;height:100%;display:block;--avbridge-fit:${DEFAULT_FIT};`;
     root.appendChild(stage);
+    this._stageEl = stage;
 
     this._videoEl = document.createElement("video");
     this._videoEl.setAttribute("part", "video");
-    this._videoEl.style.cssText = "width:100%;height:100%;display:block;background:#000;";
+    this._videoEl.style.cssText = `width:100%;height:100%;display:block;background:#000;object-fit:var(--avbridge-fit, ${DEFAULT_FIT});`;
     this._videoEl.playsInline = true;
     stage.appendChild(this._videoEl);
 
@@ -233,6 +258,10 @@ export class AvbridgeVideoElement extends HTMLElementCtor {
       this._trackObserver = new MutationObserver(() => this._syncTextTracks());
       this._trackObserver.observe(this, { childList: true, subtree: false });
     }
+    if (!this._fullscreenChangeHandler) {
+      this._fullscreenChangeHandler = () => this._onFullscreenChange();
+      document.addEventListener("fullscreenchange", this._fullscreenChangeHandler);
+    }
     // Connection is the trigger for bootstrap. If we have a pending source
     // (set before connect), kick off bootstrap now.
     const source = this._activeSource();
@@ -247,6 +276,13 @@ export class AvbridgeVideoElement extends HTMLElementCtor {
       this._trackObserver.disconnect();
       this._trackObserver = null;
     }
+    if (this._fullscreenChangeHandler) {
+      document.removeEventListener("fullscreenchange", this._fullscreenChangeHandler);
+      this._fullscreenChangeHandler = null;
+    }
+    // If we were fullscreen via some ancestor and got disconnected, release
+    // any orientation lock we had taken.
+    this._releaseOrientationLock();
     // Bump the bootstrap token so any in-flight async work is invalidated
     // before we tear down. _teardown() also bumps but we want the bump to
     // happen synchronously here so any awaited promise that resolves
@@ -287,6 +323,16 @@ export class AvbridgeVideoElement extends HTMLElementCtor {
           this._preferredStrategy = "auto";
         }
         break;
+      case "fit": {
+        const next: FitMode = newValue && FIT_VALUES.has(newValue as FitMode)
+          ? (newValue as FitMode)
+          : DEFAULT_FIT;
+        if (next === this._fit) break;
+        this._fit = next;
+        this._stageEl.style.setProperty("--avbridge-fit", next);
+        this._dispatch("fitchange", { fit: next });
+        break;
+      }
     }
   }
 
@@ -587,6 +633,15 @@ export class AvbridgeVideoElement extends HTMLElementCtor {
     else this.removeAttribute("diagnostics");
   }
 
+  get fit(): FitMode {
+    return this._fit;
+  }
+
+  set fit(value: FitMode) {
+    if (!FIT_VALUES.has(value)) return;
+    this.setAttribute("fit", value);
+  }
+
   get preferredStrategy(): PreferredStrategy {
     return this._preferredStrategy;
   }
@@ -794,6 +849,95 @@ export class AvbridgeVideoElement extends HTMLElementCtor {
         console.warn(`[avbridge] subtitle ${t.id} failed: ${err.message}`);
       },
     );
+  }
+
+  /**
+   * Disable the automatic `screen.orientation.lock()` that runs on
+   * fullscreen entry. Set when you want to honor the device's native
+   * auto-rotate instead of matching the video's intrinsic orientation.
+   */
+  get noOrientationLock(): boolean {
+    return this.hasAttribute("no-orientation-lock");
+  }
+
+  set noOrientationLock(value: boolean) {
+    if (value) this.setAttribute("no-orientation-lock", "");
+    else this.removeAttribute("no-orientation-lock");
+  }
+
+  // ── Fullscreen orientation lock ────────────────────────────────────────
+
+  /** Called whenever `document.fullscreenchange` fires. If this element (or
+   *  any of its ancestors) is now fullscreen, derive the target orientation
+   *  from the video's intrinsic size and call `screen.orientation.lock()`.
+   *  On exit, release the lock we took. iOS Safari rejects `lock()` — we
+   *  swallow the rejection so nothing breaks on that path. */
+  private _onFullscreenChange(): void {
+    if (this._destroyed) return;
+    const fsEl = document.fullscreenElement;
+    const nowFullscreen = fsEl != null && this._isInsideOrEquals(fsEl);
+    if (nowFullscreen && !this._orientationLocked) {
+      if (this.noOrientationLock) return;
+      const target = this._desiredOrientation();
+      if (!target) return; // square or unknown — don't lock
+      void this._lockOrientation(target);
+    } else if (!nowFullscreen && this._orientationLocked) {
+      this._releaseOrientationLock();
+    }
+  }
+
+  /** Walk composed-tree ancestors to see if `target` is this element or
+   *  any ancestor across shadow boundaries. `Node.contains()` can't cross
+   *  shadow roots, so when `<avbridge-player>` (the fullscreen element)
+   *  hosts this `<avbridge-video>` inside its shadow DOM, `contains()`
+   *  returns false. */
+  private _isInsideOrEquals(target: Element): boolean {
+    let node: Node | null = this;
+    while (node) {
+      if (node === target) return true;
+      const parent: Node | null = node.parentNode;
+      if (parent instanceof ShadowRoot) node = parent.host;
+      else node = parent;
+    }
+    return false;
+  }
+
+  /** Derive "landscape" / "portrait" from the intrinsic video dimensions.
+   *  Returns null when dimensions aren't known yet or the video is square.
+   *  Uses `videoWidth` / `videoHeight` from the inner `<video>`, which the
+   *  browser sets to the display-aspect-corrected size (so anamorphic
+   *  content is judged by its display aspect, not pixel aspect). */
+  private _desiredOrientation(): "landscape" | "portrait" | null {
+    const w = this._videoEl.videoWidth;
+    const h = this._videoEl.videoHeight;
+    if (!w || !h) return null;
+    if (w === h) return null;
+    return w > h ? "landscape" : "portrait";
+  }
+
+  /** Attempt to lock screen orientation. Swallows rejections — iOS Safari
+   *  doesn't implement `lock()`, and desktop / non-fullscreen contexts will
+   *  reject too. Records success so we know whether to unlock on exit. */
+  private async _lockOrientation(target: "landscape" | "portrait"): Promise<void> {
+    const so = (screen as Screen & {
+      orientation?: ScreenOrientation & { lock?: (o: string) => Promise<void> };
+    }).orientation;
+    if (!so || typeof so.lock !== "function") return;
+    try {
+      await so.lock(target);
+      this._orientationLocked = true;
+    } catch {
+      // iOS Safari, desktop, or user denied — ignore.
+    }
+  }
+
+  private _releaseOrientationLock(): void {
+    if (!this._orientationLocked) return;
+    this._orientationLocked = false;
+    const so = screen.orientation as ScreenOrientation | undefined;
+    if (so && typeof so.unlock === "function") {
+      try { so.unlock(); } catch { /* ignore */ }
+    }
   }
 
   // ── Public methods ─────────────────────────────────────────────────────

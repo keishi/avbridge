@@ -8,10 +8,11 @@ This document is the contract for the reference web component shipped as the
 3. **Provide an `HTMLMediaElement`-compatible primitive** that consumers can
    wrap with their own UI.
 
-It is **not** a player UI framework. The element ships zero controls. The
-tag name `<avbridge-video>` is **reserved** for a future controls-bearing
-element built on top of `<avbridge-video>`; until that exists, this document
-covers only `<avbridge-video>`.
+It is **not** a player UI framework. The element ships zero controls. For
+YouTube-style chrome (seek bar, play/pause, settings menu, fullscreen,
+auto-hiding controls with consumer toolbar slots), use `<avbridge-player>`
+at the `avbridge/player-element` subpath — it wraps this element. This
+document covers only `<avbridge-video>`.
 
 > **History:** in 1.x this element was named `<avbridge-video>`. It was
 > renamed to `<avbridge-video>` in 2.0 because the original name oversold
@@ -36,8 +37,9 @@ covers only `<avbridge-video>`.
 <avbridge-video></avbridge-video>
 ```
 
-`<avbridge-video>` is **reserved** and not registered. Importing
-`avbridge/element` only registers `<avbridge-video>`.
+Importing `avbridge/element` registers `<avbridge-video>`. The
+chrome-bearing `<avbridge-player>` is registered separately via
+`avbridge/player-element`.
 
 ---
 
@@ -57,6 +59,8 @@ covers only `<avbridge-video>`.
 - `disableremoteplayback` — boolean (passed through)
 - `diagnostics` — boolean (reserved)
 - `preferstrategy` — `"auto" | "native" | "remux" | "hybrid" | "fallback"` (preference, not a command)
+- `fit` — `"contain" | "cover" | "fill"` (maps to `object-fit` on the inner `<video>` and the fallback canvas; fires a `fitchange` event; default `"contain"`)
+- `no-orientation-lock` — boolean; opt out of the default behavior of locking `screen.orientation` to match the video's intrinsic aspect on fullscreen entry
 
 ### Properties
 

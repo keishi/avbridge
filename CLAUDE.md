@@ -39,7 +39,7 @@ Also ships `remux()` and `transcode()` as standalone exports, plus a
 | `src/strategies/remux/{index,pipeline,mse}.ts` | mediabunny → fMP4 → MSE. `pipeline.ts` has the video/audio pump. |
 | `src/strategies/hybrid/{index,decoder}.ts` | libav demux + WebCodecs decode. |
 | `src/strategies/fallback/{index,decoder,video-renderer,audio-output,libav-loader}.ts` | Full software decode path. **Most subtle bugs live here.** |
-| `src/element/avbridge-video.ts` | Custom element. `<avbridge-player>` is **reserved**, not implemented. |
+| `src/element/{avbridge-video,avbridge-player,player-styles,player-icons}.ts` | Custom elements. `<avbridge-video>` is the bare HTMLMediaElement-compatible primitive; `<avbridge-player>` is the chrome-bearing player on top of it. |
 | `src/util/source.ts` | `NormalizedSource`, magic-byte sniff, Range-request fetcher. |
 | `src/util/debug.ts` | `dbg.info/warn/diag/timed` helper + the unconditional watchdogs. |
 | `src/util/libav-http-reader.ts` | HTTP block reader for streaming libav inputs over Range. |
@@ -169,9 +169,14 @@ specific to this repo:
   `Math.max(scheduled, now)` is a stacking hazard — multiple stale
   samples all start at the same instant and play on top of each
   other. See POSTMORTEMS.md entry 1 for the Web Audio pattern.
-- **`<avbridge-player>` is reserved** for a future controls-bearing
-  element. The shipping element is `<avbridge-video>` — a bare
-  HTMLMediaElement-compatible primitive with zero built-in UI.
+- **Two elements ship:** `<avbridge-video>` is the bare
+  HTMLMediaElement-compatible primitive with zero built-in UI;
+  `<avbridge-player>` wraps it with YouTube-style controls, settings
+  menu, keyboard / touch gestures, and top/bottom auto-hiding chrome
+  (including `top-left` / `top-right` consumer slots). New *primitive*
+  features (fit, orientation, pixel-level presentation) belong on
+  `<avbridge-video>`; new *chrome* features (menu entries, toolbar
+  slots, `::part(...)` hooks) belong on `<avbridge-player>`.
 - **Shadow DOM stage wrapper:** `<avbridge-video>` puts a
   `<div part="stage">` around the inner `<video>` inside its shadow
   root. The fallback renderer's canvas attaches via

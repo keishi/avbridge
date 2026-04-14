@@ -4,6 +4,44 @@ All notable changes to **avbridge.js** are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.8.0]
+
+Element feature release — fit mode, consumer-slotted toolbar chrome, and
+orientation-aware fullscreen.
+
+### Added
+
+- **`fit` attribute on `<avbridge-video>`.** `fit="contain|cover|fill"`
+  (also reflected as the `fit` property, with a `fitchange` event) maps to
+  `object-fit` on the inner `<video>` and the fallback canvas via a new
+  `--avbridge-fit` CSS custom property on the stage wrapper. Default
+  `contain`; invalid values fall back to `contain`. Proxied through
+  `<avbridge-player>`.
+- **Top toolbar slots on `<avbridge-player>`.** `<slot name="top-left">`
+  and `<slot name="top-right">` inside a new `part="toolbar-top"`
+  wrapper let consumers place back / title / translate buttons inside the
+  auto-hide chrome so they fade together with the bottom controls. A
+  `slotchange` listener toggles a `data-toolbar-empty` host attribute so
+  the gradient band disappears when no content is slotted. Click,
+  double-click, and tap handlers ignore events originating from slotted
+  content via `composedPath()` — so consumer buttons don't trigger
+  play/pause or seek.
+- **Orientation-aware fullscreen on `<avbridge-video>`.** On fullscreen
+  entry (including fullscreen applied to an ancestor like
+  `<avbridge-player>` whose shadow DOM hosts the video), the element
+  derives the target orientation from the video's intrinsic
+  `videoWidth`/`videoHeight` (already SAR-corrected by the browser) and
+  calls `screen.orientation.lock('landscape'|'portrait')`. Releases the
+  lock on exit. iOS Safari rejections are swallowed (iOS handles rotation
+  via `webkitEnterFullscreen` on `<video>` itself). Opt out per element
+  with the `no-orientation-lock` attribute / `noOrientationLock` property.
+
+### Notes
+
+- `<avbridge-player>` is no longer a "reserved" name — it's the
+  shipping chrome-bearing player. `<avbridge-video>` remains the bare
+  HTMLMediaElement-compatible primitive.
+
 ## [2.7.0]
 
 Cross-browser confidence release. A Playwright-based test tier now

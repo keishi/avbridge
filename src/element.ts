@@ -9,9 +9,9 @@
  * The registration is guarded so re-importing this module (e.g. via HMR or
  * multiple bundles) does not throw a "name already defined" error.
  *
- * The tag name `<avbridge-player>` is reserved for a future controls-bearing
- * element. Today, only `<avbridge-video>` (the bare HTMLMediaElement-compatible
- * primitive) is registered.
+ * Only `<avbridge-video>` (the bare HTMLMediaElement-compatible primitive)
+ * is registered here. The chrome-bearing `<avbridge-player>` lives at the
+ * `avbridge/player-element` subpath.
  */
 
 import { AvbridgeVideoElement } from "./element/avbridge-video.js";

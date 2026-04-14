@@ -45,6 +45,130 @@ describe("avbridge-video — construction", () => {
   });
 });
 
+describe("avbridge-video — fit mode", () => {
+  it("defaults to contain", () => {
+    const el = createElement();
+    expect(el.fit).toBe("contain");
+  });
+
+  it("setting fit attribute updates the property, CSS custom property, and fires fitchange", () => {
+    const el = createElement();
+    const events: string[] = [];
+    el.addEventListener("fitchange", (e) => {
+      events.push((e as CustomEvent<{ fit: string }>).detail.fit);
+    });
+    el.setAttribute("fit", "cover");
+    expect(el.fit).toBe("cover");
+    const stage = el.shadowRoot!.querySelector('[part="stage"]') as HTMLElement;
+    expect(stage.style.getPropertyValue("--avbridge-fit")).toBe("cover");
+    expect(events).toEqual(["cover"]);
+
+    el.setAttribute("fit", "fill");
+    expect(events).toEqual(["cover", "fill"]);
+  });
+
+  it("setting the fit property reflects to the attribute", () => {
+    const el = createElement();
+    el.fit = "cover";
+    expect(el.getAttribute("fit")).toBe("cover");
+  });
+
+  it("invalid fit attribute falls back to contain", () => {
+    const el = createElement();
+    el.setAttribute("fit", "cover");
+    el.setAttribute("fit", "bogus");
+    expect(el.fit).toBe("contain");
+  });
+
+  it("same-value fit assignment does not re-dispatch fitchange", () => {
+    const el = createElement();
+    let count = 0;
+    el.addEventListener("fitchange", () => count++);
+    el.setAttribute("fit", "cover");
+    el.setAttribute("fit", "cover");
+    expect(count).toBe(1);
+  });
+});
+
+describe("avbridge-video — orientation lock on fullscreen", () => {
+  type Lockable = { lock: (o: string) => Promise<void>; unlock: () => void };
+
+  function stubOrientation(): { calls: string[]; unlocked: number } {
+    const calls: string[] = [];
+    let unlocked = 0;
+    const stub: Partial<Lockable> = {
+      lock: async (o: string) => { calls.push(o); },
+      unlock: () => { unlocked++; },
+    };
+    Object.defineProperty(screen, "orientation", {
+      configurable: true,
+      value: stub,
+    });
+    return { calls, get unlocked() { return unlocked; } };
+  }
+
+  function stubVideoSize(el: AvbridgeVideoElement, w: number, h: number): void {
+    const video = el.shadowRoot!.querySelector("video")!;
+    Object.defineProperty(video, "videoWidth", { configurable: true, value: w });
+    Object.defineProperty(video, "videoHeight", { configurable: true, value: h });
+  }
+
+  function setFullscreen(el: Element | null): void {
+    Object.defineProperty(document, "fullscreenElement", { configurable: true, value: el });
+    document.dispatchEvent(new Event("fullscreenchange"));
+  }
+
+  it("locks landscape when entering fullscreen with landscape video", async () => {
+    const stub = stubOrientation();
+    const el = createElement();
+    document.body.appendChild(el);
+    stubVideoSize(el, 1920, 1080);
+    setFullscreen(el);
+    await Promise.resolve(); await Promise.resolve();
+    expect(stub.calls).toEqual(["landscape"]);
+    setFullscreen(null);
+    expect(stub.unlocked).toBe(1);
+    el.remove();
+  });
+
+  it("locks portrait when entering fullscreen with portrait video", async () => {
+    const stub = stubOrientation();
+    const el = createElement();
+    document.body.appendChild(el);
+    stubVideoSize(el, 1080, 1920);
+    setFullscreen(el);
+    await Promise.resolve(); await Promise.resolve();
+    expect(stub.calls).toEqual(["portrait"]);
+    setFullscreen(null);
+    el.remove();
+  });
+
+  it("no-orientation-lock attribute disables locking", async () => {
+    const stub = stubOrientation();
+    const el = createElement();
+    el.setAttribute("no-orientation-lock", "");
+    document.body.appendChild(el);
+    stubVideoSize(el, 1920, 1080);
+    setFullscreen(el);
+    await Promise.resolve(); await Promise.resolve();
+    expect(stub.calls).toEqual([]);
+    setFullscreen(null);
+    el.remove();
+  });
+
+  it("skips lock when video dimensions are unknown", async () => {
+    const stub = stubOrientation();
+    const el = createElement();
+    document.body.appendChild(el);
+    stubVideoSize(el, 0, 0);
+    setFullscreen(el);
+    await Promise.resolve();
+    expect(stub.calls).toEqual([]);
+    setFullscreen(null);
+    el.remove();
+  });
+});
+
 describe("avbridge-video — attribute / property reflection", () => {
   it("src property reflects to attribute", () => {
     const el = createElement();

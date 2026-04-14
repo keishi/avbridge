@@ -342,6 +342,7 @@ export interface AvbridgeVideoElementEventMap {
   error: CustomEvent<{ error: Error; diagnostics: DiagnosticsSnapshot | null }>;
   progress: CustomEvent<{ buffered: TimeRanges }>;
   loadstart: CustomEvent<Record<string, never>>;
+  fitchange: CustomEvent<{ fit: "contain" | "cover" | "fill" }>;
 }
 
 // ── Conversion types ────────────────────────────────────────────────────
