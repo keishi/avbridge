@@ -4,6 +4,85 @@ All notable changes to **avbridge.js** are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.3.0]
+
+This release makes avbridge.js production-ready for authenticated
+remote media, legacy codecs, and end-user embedding.
+
+### Added
+
+- **`<avbridge-player>` controls-bearing element** (new subpath:
+  `avbridge/player`). Full YouTube-style player UI — play/pause, seek
+  bar, time display, volume/mute, settings menu (playback speed,
+  subtitle + audio tracks, Stats for Nerds), fullscreen. Auto-hide
+  controls, keyboard shortcuts (space/k, f, m, j/l, arrows, >/<, Esc),
+  touch gestures (tap-to-toggle, double-tap ±10s with ripple,
+  tap-and-hold for 2x speed). `::part()` hooks on every control.
+- **Transport configurability** — `requestInit` and `fetchFn` on
+  `CreatePlayerOptions`; `probe()` takes a transport argument.
+  Threaded through probe Range requests, subtitle fetches, and the
+  libav HTTP reader. Unblocks signed URLs and custom auth headers.
+- **Bitstream fixups** — `mpeg4_unpack_bframes` BSF wired into the
+  fallback and hybrid decoders for DivX packed-B-frame files.
+  Annex B → AVCC normalization in the libav remux path. Applied
+  filters visible in diagnostics as `bsfApplied`.
+- **Structured errors** — new `AvbridgeError` class with
+  machine-readable `code` (`ERR_AVBRIDGE_*`) and human-readable
+  `recovery` hints. Applied to probe, codec, MSE, player-readiness,
+  and strategy-exhaustion paths.
+- **DTS, TrueHD, Theora decoder support** in the custom libav
+  variant. Probe re-runs via libav when mediabunny returns unknown
+  codecs. Hybrid strategy now used for "native video + fallback
+  audio" combos (e.g. H.264 + DTS in Blu-ray MKV rips) instead of
+  the much slower full WASM fallback.
+- **Streaming transcode output** via `outputStream` option. Pairs
+  with `showSaveFilePicker()` for multi-GB file transcoding without
+  loading the entire output into memory.
+- **Background tab pause/resume** — auto-pause on `visibilitychange`
+  when hidden, auto-resume on return. Prevents degraded playback
+  from Chrome's rAF/setTimeout throttling. Configurable via
+  `backgroundBehavior: "pause" | "continue"`.
+- **GitHub Pages demo** — deployed at `keishi.github.io/avbridge/`.
+  COOP/COEP service worker enables SharedArrayBuffer on static
+  hosting.
+- **Consolidated rebrand** — public-facing name is now "avbridge.js"
+  across README, docs, demos. npm package name unchanged (`avbridge`).
+
+### Fixed
+
+- **A/V sync for long-running hybrid playback** — video PTS and
+  `AudioContext.currentTime` drift ~7ms/s (different clock domains).
+  Now periodically re-snaps calibration every 10 seconds, keeping
+  max drift under 70ms (below human lip-sync threshold). See
+  `docs/dev/POSTMORTEMS.md` for the full investigation.
+- **Hybrid pump ordering** — audio decoded before video, with
+  sub-batch yields during heavy audio decode (DTS) to prevent rAF
+  starvation that caused visible stutter.
+- **Probe regression** for MKV files with unrecognized codecs —
+  now falls back to libav probe instead of returning "unknown".
+- **Variant picker** rewritten to use an allowlist (codecs
+  webcodecs variant can handle) instead of a denylist. New codecs
+  automatically route to the avbridge variant.
+- **Hybrid + fallback preserve HTMLMediaElement contract** —
+  dispatch standard `play`/`pause`/`volumechange` events and patch
+  `target.volume`/`muted` as getter/setters so `<avbridge-player>`'s
+  controls reflect real state.
+- **Seek bar click position** — custom pointer handler replaces
+  native range-input click math, eliminating the thumb-vs-cursor
+  offset at the track edges.
+
+### Changed
+
+- Classification now routes native-video + fallback-audio combos
+  to hybrid (WebCodecs video + libav audio) instead of full
+  fallback. Previously a Blu-ray MKV with H.264 + DTS went straight
+  to WASM software decode (unwatchable at 1080p).
+- Annex B → AVCC conversion is now applied during libav remux to
+  produce correct fMP4 output.
+- 269 unit tests across 17 files (up from 119 across 9). Three
+  testing tiers documented: unit (vitest + jsdom), browser
+  integration (Puppeteer), and strategy-to-element contract.
+
 ## [2.2.1]
 
 ### Fixed

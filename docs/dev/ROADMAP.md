@@ -1,7 +1,6 @@
 # avbridge.js — Roadmap
 
-Current released version: **v2.2.1** (2026-04-12)
-Main branch is ahead with a lot of v2.3-scale work — see below.
+Current released version: **v2.3.0** (2026-04-14)
 
 ## Project philosophy
 
@@ -54,9 +53,11 @@ avbridge focuses on:
 
 ---
 
-## Shipped since v2.2.1 (awaiting a version bump)
+### v2.3.0 — Production readiness
 
-All of these are on `main` and deployed to the GitHub Pages demo.
+Released 2026-04-14. The release that makes avbridge.js production-ready
+for authenticated remote media, legacy codecs, and end-user embedding.
+Deployed to the GitHub Pages demo.
 
 ### Production-readiness (originally planned v2.3)
 
@@ -130,25 +131,9 @@ Documented in `docs/dev/POSTMORTEMS.md`.
 
 ---
 
-## v2.3.0 — Next release (version bump + publish)
-
-All the work above is a single coherent release. Remaining to cut it:
-
-- Bump `package.json` to 2.3.0.
-- Consolidated CHANGELOG entry.
-- `npm publish` (user runs — needs OTP).
-- Push tag.
-
----
-
 ## v2.4.x — Breadth
 
-### AVI/ASF/FLV transcode input
-
-`transcode()` currently only accepts mediabunny-readable containers
-(MP4/MKV/WebM/OGG/MOV/MP3/FLAC/WAV). Wiring the libav demux →
-WebCodecs encode path completes the "any format in, modern format
-out" promise.
+Ordered by likely user pain, not implementation difficulty.
 
 ### Multi-audio track selection
 
@@ -157,6 +142,21 @@ out" promise.
 - `<avbridge-player>` has a UI menu for it (`setAudioTrack(id)` on
   the element), but the underlying strategies don't honor it.
 - Common in anime, movies, and rips — users expect switching.
+
+### AVI/ASF/FLV transcode input
+
+`transcode()` currently only accepts mediabunny-readable containers
+(MP4/MKV/WebM/OGG/MOV/MP3/FLAC/WAV). Wiring the libav demux →
+WebCodecs encode path completes the "any format in, modern format
+out" promise.
+
+### `<avbridge-player>` polish
+
+- **Typed `addEventListener` overloads** so consumers don't need
+  `as unknown as CustomEvent` casts.
+- **Drag-and-drop file input** on the player area.
+- **Subtitle `<track>` children** parsing (currently only supports
+  `options.subtitles`).
 
 ### Buffered ranges for canvas strategies
 
@@ -172,19 +172,14 @@ cues as a scrollable list with timestamps — click a cue to jump to
 that point. Like YouTube's transcript panel. Needs access to the
 subtitle track cues via the player's text track.
 
-### `<avbridge-player>` polish
-
-- **Typed `addEventListener` overloads** so consumers don't need
-  `as unknown as CustomEvent` casts.
-- **Drag-and-drop file input** on the player area.
-- **Subtitle `<track>` children** parsing (currently only supports
-  `options.subtitles`).
-
 ---
 
-## v3.0 — Future
+## v3.0 — Strategic expansion
 
-### Resilience layer
+Core architectural work. Each item is substantial enough to justify
+a major version on its own.
+
+### Resilience
 
 The broad vision from `VISION_PLUS.md`: repair modes, degradation
 strategies, damaged file recovery. Targeted bitstream fixups
@@ -192,7 +187,7 @@ strategies, damaged file recovery. Targeted bitstream fixups
 this is the fuller version — repair-mode API, fallback quality
 knobs, error-concealing renderer.
 
-### HDR support
+### HDR
 
 HDR video playback across strategies:
 
@@ -206,8 +201,22 @@ HDR video playback across strategies:
   assuming SDR. Proper HDR needs PQ (SMPTE ST 2084) / HLG transfer
   curve handling and wide-gamut color conversion.
 
-Browser HDR canvas support is still evolving (Chrome has `configureHighDynamicRange`
-behind a flag as of early 2026). Track browser progress before investing.
+Browser HDR canvas support is still evolving (Chrome has
+`configureHighDynamicRange` behind a flag as of early 2026). Track
+browser progress before investing.
+
+### Performance
+
+- OffscreenCanvas / worker rendering (move the canvas paint loop off
+  the main thread so DTS decode and rAF stop competing).
+- libav.js pthreads (blocked on upstream libav.js bug; single-threaded
+  WASM with SIMD for now).
+- HTTP reader LRU cache for re-fetches on seeks.
+
+## Candidate features (nice-to-have)
+
+Ideas that don't belong to a specific release — add if a real use
+case arrives.
 
 ### Subtitle translation
 
@@ -217,12 +226,27 @@ enhancement in the `<avbridge-player>` settings menu — detect API
 availability and show "Translate to [locale]" when present. No
 server required, runs locally in Chrome.
 
-### Performance
+---
 
-- OffscreenCanvas / worker rendering.
-- libav.js pthreads (blocked on upstream libav.js bug; single-threaded
-  WASM with SIMD for now).
-- HTTP reader LRU cache for re-fetches on seeks.
+## Integration targets
+
+avbridge.js exists to serve real consumers. Roadmap priorities are
+motivated by what these integrations need:
+
+- **Browser apps with custom UI** — use `createPlayer()` directly or
+  `<avbridge-video>` as a primitive. Drives the "HTMLMediaElement
+  contract must hold for all strategies" rule.
+- **Local / remote file explorers** — drives transport configurability
+  (signed URLs), URL streaming, and robust probe behavior for
+  arbitrary files.
+- **Embedded player use** — drives `<avbridge-player>`, mobile support,
+  keyboard/touch shortcuts, and `::part()` styling hooks.
+- **Conversion tools** — drives `remux()` / `transcode()`, streaming
+  output for large files, and format breadth.
+
+When evaluating a feature proposal, check which integration target
+it serves. If none, it's likely a candidate feature, not a roadmap
+item.
 
 ---
 

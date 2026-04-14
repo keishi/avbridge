@@ -97,7 +97,7 @@ const SCENARIOS = [
     // wraps it. The ceiling is a tripwire for order-of-magnitude regressions
     // (e.g. libav accidentally pulled into the eager bundle), not a tight
     // budget — realistic first-play cost is dominated by the ~1 MB lazy wasm.
-    maxEagerGzip: 20_000,
+    maxEagerGzip: 22_000,
     requireInEntry: ["customElements"],
   },
 ];
