@@ -14,11 +14,6 @@ auto-hiding controls with consumer toolbar slots), use `<avbridge-player>`
 at the `avbridge/player-element` subpath — it wraps this element. This
 document covers only `<avbridge-video>`.
 
-> **History:** in 1.x this element was named `<avbridge-video>`. It was
-> renamed to `<avbridge-video>` in 2.0 because the original name oversold
-> what the element does (it has no UI), and to free `<avbridge-video>` for
-> the future controls-bearing sibling.
-
 ---
 
 ## Design principles
@@ -43,13 +38,12 @@ chrome-bearing `<avbridge-player>` is registered separately via
 
 ---
 
-## Mandatory API surface (v1)
+## API surface
 
 ### Attributes
 
 - `src` — URL string source
 - `autoplay` — boolean
-- `controls` — boolean (reserved; the element ships no built-in UI)
 - `muted` — boolean
 - `loop` — boolean
 - `preload` — `"none" | "metadata" | "auto"`
@@ -57,7 +51,7 @@ chrome-bearing `<avbridge-player>` is registered separately via
 - `playsinline` — boolean (passed through to the inner `<video>`)
 - `crossorigin` — `"anonymous" | "use-credentials"` (passed through)
 - `disableremoteplayback` — boolean (passed through)
-- `diagnostics` — boolean (reserved)
+- `diagnostics` — boolean; opt-in for verbose `[avbridge:*]` logging and a diagnostics payload on events
 - `preferstrategy` — `"auto" | "native" | "remux" | "hybrid" | "fallback"` (preference, not a command)
 - `fit` — `"contain" | "cover" | "fill"` (maps to `object-fit` on the inner `<video>` and the fallback canvas; fires a `fitchange` event; default `"contain"`)
 - `no-orientation-lock` — boolean; opt out of the default behavior of locking `screen.orientation` to match the video's intrinsic aspect on fullscreen entry
@@ -67,11 +61,13 @@ chrome-bearing `<avbridge-player>` is registered separately via
 - `src: string | null`
 - `source: MediaInput | null` — `File | Blob | URL | ArrayBuffer | Uint8Array`
 - `autoplay: boolean`
-- `controls: boolean`
 - `muted: boolean`
 - `loop: boolean`
 - `preload: "none" | "metadata" | "auto"`
 - `diagnostics: boolean`
+- `fit: "contain" | "cover" | "fill"`
+- `noOrientationLock: boolean`
+- `subtitles: Array<{ url; language?; format? }> | null` — external subtitle list applied on next bootstrap
 - `currentTime: number` — read **and** write (writes seek)
 - `readonly duration: number`
 - `readonly paused: boolean`
@@ -84,7 +80,7 @@ chrome-bearing `<avbridge-player>` is registered separately via
 - `readonly audioTracks: AudioTrackInfo[]`
 - `readonly subtitleTracks: SubtitleTrackInfo[]`
 
-#### `HTMLMediaElement` parity surface (added in 1.1)
+#### `HTMLMediaElement` parity surface
 
 - `poster: string`
 - `volume: number`
@@ -112,7 +108,7 @@ chrome-bearing `<avbridge-player>` is registered separately via
 - `destroy(): Promise<void>` — full teardown; element becomes unusable
 - `setAudioTrack(id: number): Promise<void>`
 - `setSubtitleTrack(id: number | null): Promise<void>`
-- `addTextTrack(track: AvbridgeTextTrackInit): Promise<void>`
+- `addSubtitle(subtitle: { url; language?; format? }): Promise<void>` — attach a sidecar subtitle track mid-playback
 - `canPlayType(mimeType: string): "" | "maybe" | "probably"` — passes through
   to the inner `<video>`. Note that this answers about the *browser's* native
   support, not avbridge's full capabilities — avbridge can play many formats
@@ -123,11 +119,14 @@ chrome-bearing `<avbridge-player>` is registered separately via
 
 - `ready` — `{ diagnostics }` — fired once per successful bootstrap
 - `error` — `{ error, diagnostics }` — bootstrap or runtime error
-- `strategychange` — `{ strategy, strategyClass, reason, diagnostics }`
+- `strategychange` — `{ strategy, strategyClass, reason, from?, currentTime?, diagnostics }` — fires on initial classification and any runtime escalation
 - `trackschange` — `{ audioTracks, subtitleTracks }`
-- `loadstart` (optional) — fired when bootstrap begins
-- `sourcechange` (optional) — fired when `src`/`source` changes
-- `destroy` (optional) — fired when element is destroyed
+- `timeupdate` — `{ currentTime }` — dispatched by the player layer so canvas strategies emit it too
+- `progress` — `{ buffered }`
+- `ended` — `{}`
+- `loadstart` — `{}` — fired when bootstrap begins
+- `destroy` — `{}` — fired when the element is destroyed
+- `fitchange` — `{ fit }` — fires when the `fit` attribute/property changes
 
 #### Forwarded `HTMLMediaElement` events (added in 1.1)
 
@@ -189,16 +188,16 @@ declarative children aren't viable (e.g. file inputs).
 
 ### Exposed parts
 
-- `video` — the underlying `<video>` element
-- `controls` — the controls bar (v1.1)
-- `play-button`
-- `seek-bar`
-- `time-display`
-- `strategy-badge`
-- `diagnostics-panel`
-- `subtitle-menu`
-- `audio-menu`
-- `drop-zone`
+- `video` — the underlying shadow-DOM `<video>` element
+- `stage` — the positioned `<div>` wrapping `video`. The fallback
+  strategy's canvas overlay attaches here, so styling the stage
+  (background, border-radius, aspect-ratio) works across all
+  strategies. **Don't remove the wrapper** — removing it breaks
+  canvas attachment; see `CLAUDE.md`.
+
+Control parts (`play-button`, `seek-bar`, `settings-button`,
+`fullscreen-button`, etc.) live on `<avbridge-player>`, not on this
+element.
 
 ---
 
@@ -273,7 +272,7 @@ never imported by the root entry. The bundle audit verifies this.
 
 ---
 
-## Edge case list (Phase A acceptance tests)
+## Edge case list (lifecycle acceptance tests)
 
 ### Category 1: Async lifecycle races
 
@@ -340,38 +339,15 @@ never imported by the root entry. The bundle audit verifies this.
 | 24 | HMR / class redefinition | P1 | Existing instances function or fail gracefully |
 | 25 | Double registration guard | P1 | Mandatory |
 
-### Phase A acceptance bar
+### Acceptance bar
 
-**P0 must pass.** P1 should pass but does not block "Phase A done." The five P0 cases are the ones that catch ~80% of real bugs:
+**P0 must pass.** P1 should pass but is not release-blocking. The five P0 cases are the ones that catch ~80% of real bugs:
 
 1. Disconnect during bootstrap (#1)
 2. Rapid src reassignment (#3)
 3. Bootstrap race (#4)
 4. DOM move (#8)
 5. play() before ready (#13)
-
----
-
-## Phase A scope (no UI)
-
-Phase A delivers the lifecycle scaffold only:
-
-- Element class registered via subpath export
-- `src` / `source` / `currentTime` / `duration` properties
-- `play()` / `pause()` / `load()` / `destroy()` methods
-- `ready` / `error` / `strategychange` / `trackschange` events
-- Bootstrap token pattern enforcing all five lifecycle invariants
-- Shadow DOM with just `<video part="video">` inside
-- All P0 lifecycle tests passing
-- Demo migrated to use `<avbridge-video>`
-
-Phase B (later) adds:
-
-- Built-in controls (play/pause, seek bar, time display)
-- Diagnostics panel (opt-in via `diagnostics` attribute)
-- `<track>` children handling
-- Drag-and-drop file input
-- Audio/subtitle track menus
 
 ---
 
@@ -382,17 +358,18 @@ Phase B (later) adds:
 - `src` / `source`
 - `play()` / `pause()` / `load()`
 - `currentTime` / `duration`
-- `controls` / `autoplay`
-- `diagnostics` / `getDiagnostics()`
-- `ready` / `error` / `strategychange` / `trackschange` events
+- `autoplay` / `muted` / `loop`
+- `fit`
+- `ready` / `error` / `strategychange` / `timeupdate` events
 
 ### Power-user (clearly secondary)
 
 - `preferredStrategy`
-- `player` (escape hatch)
+- `player` (escape hatch) / `videoElement` (escape hatch)
 - `audioTracks` / `subtitleTracks`
-- `setAudioTrack()` / `setSubtitleTrack()`
-- `addTextTrack()`
+- `setAudioTrack()` / `setSubtitleTrack()` / `addSubtitle()`
+- `getDiagnostics()` / `diagnostics` attribute
+- `noOrientationLock`
 
 ---
 
@@ -413,17 +390,23 @@ export interface AvbridgeVideoElement extends HTMLElement {
   src: string | null;
   source: MediaInput | null;
   autoplay: boolean;
-  controls: boolean;
   muted: boolean;
   loop: boolean;
   preload: "none" | "metadata" | "auto";
   diagnostics: boolean;
+  fit: "contain" | "cover" | "fill";
+  noOrientationLock: boolean;
 
   currentTime: number;
   readonly duration: number;
   readonly paused: boolean;
   readonly ended: boolean;
   readonly readyState: number;
+  readonly buffered: TimeRanges;
+  readonly played: TimeRanges;
+  readonly seekable: TimeRanges;
+  readonly videoWidth: number;
+  readonly videoHeight: number;
 
   preferredStrategy: "auto" | "native" | "remux" | "hybrid" | "fallback";
 
@@ -431,8 +414,12 @@ export interface AvbridgeVideoElement extends HTMLElement {
   readonly strategyClass: StrategyClass | null;
 
   readonly player: UnifiedPlayer | null;
+  readonly videoElement: HTMLVideoElement;
   readonly audioTracks: AudioTrackInfo[];
   readonly subtitleTracks: SubtitleTrackInfo[];
+  subtitles:
+    | Array<{ url: string; language?: string; format?: "vtt" | "srt" }>
+    | null;
 
   load(): Promise<void>;
   play(): Promise<void>;
@@ -441,8 +428,14 @@ export interface AvbridgeVideoElement extends HTMLElement {
 
   setAudioTrack(id: number): Promise<void>;
   setSubtitleTrack(id: number | null): Promise<void>;
+  addSubtitle(subtitle: {
+    url: string;
+    language?: string;
+    format?: "vtt" | "srt";
+  }): Promise<void>;
 
   getDiagnostics(): DiagnosticsSnapshot | null;
+  canPlayType(mimeType: string): CanPlayTypeResult;
 }
 
 declare global {
@@ -505,10 +498,10 @@ if (player) {
 
 ---
 
-## Out of scope for v1
+## Out of scope
 
 - Hard `setStrategy()` on the element (use `el.player.setStrategy()` instead)
 - Theming API beyond `::part()`
 - Plugin system on the element layer (use `createPlayer({ plugins: [...] })`)
-- Skinning / templating
+- Skinning / templating (use `<avbridge-player>` or build your own chrome over `<avbridge-video>`)
 - Streaming (HLS/DASH) — same scope as the engine

@@ -401,6 +401,12 @@ LGPL compliance — see [`NOTICE.md`](./NOTICE.md) and
 
 ## Demos
 
+Try it live: **https://keishi.github.io/avbridge/** — player + converter
+running against the latest release, served from GitHub Pages with the
+COOP/COEP headers needed for SharedArrayBuffer.
+
+Or run locally:
+
 ```bash
 npm install
 npm run demo
