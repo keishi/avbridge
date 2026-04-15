@@ -99,6 +99,13 @@ export async function createHybridSession(
       ? [[0, ctx.duration]]
       : []),
   });
+  Object.defineProperty(target, "buffered", {
+    configurable: true,
+    get: () => {
+      const end = handles.bufferedUntilSec();
+      return makeTimeRanges(end > 0 ? [[0, end]] : []);
+    },
+  });
 
   async function waitForBuffer(): Promise<void> {
     const start = performance.now();

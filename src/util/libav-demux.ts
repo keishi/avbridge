@@ -248,6 +248,29 @@ export function sanitizePacketTimestamp(
   pkt.time_base_den = 1_000_000;
 }
 
+/**
+ * Convert a raw libav packet's pts to seconds using the given stream
+ * time_base, or return `null` if the packet lacks a valid pts. Used by
+ * the hybrid + fallback strategies to track the demuxer's read-ahead
+ * progress (the signal behind `<video>.buffered` on canvas strategies).
+ *
+ * Separate from `sanitizePacketTimestamp` — sanitization mutates the
+ * packet and happens right before decoder feed; this peeks at the
+ * timestamp earlier in the pump so we can track buffered extent without
+ * perturbing the decode path.
+ */
+export function packetPtsSec(pkt: LibavPacket, timeBase: [number, number] | undefined): number | null {
+  const lo = pkt.pts ?? 0;
+  const hi = pkt.ptshi ?? 0;
+  const isInvalid = (hi === -2147483648 && lo === 0) || !Number.isFinite(lo);
+  if (isInvalid) return null;
+  const tb = timeBase ?? [1, 1_000_000];
+  if (!tb[0] || !tb[1]) return null;
+  const pts64 = hi * 0x100000000 + lo;
+  const sec = (pts64 * tb[0]) / tb[1];
+  return Number.isFinite(sec) ? sec : null;
+}
+
 // ─────────────────────────────────────────────────────────────────────────
 // Audio frame → interleaved Float32 (extracted from
 // strategies/hybrid/decoder.ts + strategies/fallback/decoder.ts).

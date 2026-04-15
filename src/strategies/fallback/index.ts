@@ -152,6 +152,18 @@ export async function createFallbackSession(
       ? [[0, ctx.duration]]
       : []),
   });
+  // buffered: demuxer's read-ahead frontier (highest pts pumped from
+  // libav). Single [0, end] range — approximation of "how far we've
+  // read through the source," the signal the seek-bar buffered
+  // indicator wants. Real MSE-style per-range tracking isn't
+  // meaningful here since decoded frames are consumed in flight.
+  Object.defineProperty(target, "buffered", {
+    configurable: true,
+    get: () => {
+      const end = handles.bufferedUntilSec();
+      return makeTimeRanges(end > 0 ? [[0, end]] : []);
+    },
+  });
 
   /**
    * Wait until the decoder has produced enough buffered output to start

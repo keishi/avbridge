@@ -4,6 +4,34 @@ All notable changes to **avbridge.js** are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.8.5]
+
+Buffered ranges on canvas strategies — the seek bar's "buffered"
+indicator now fills on hybrid and fallback playback, where it was
+empty before.
+
+### Added
+
+- **`<video>.buffered` on hybrid + fallback** — each strategy
+  patches `target.buffered` with a single synthesized `[0, frontier]`
+  `TimeRanges`, where `frontier` is the highest packet pts pumped
+  from the libav demuxer. Monotonic; does not shrink on seek. This
+  is a seek-bar-UX signal, not MSE-fidelity per-range availability
+  (decoded frames are consumed in flight on canvas strategies).
+- **`packetPtsSec(pkt, timeBase)` helper** in
+  `src/util/libav-demux.ts` — pure pts-to-seconds conversion that
+  handles AV_NOPTS_VALUE, 64-bit pts split across hi/lo, and
+  arbitrary time_base. Unit-tested.
+- **`bufferedUntilSec()` on `HybridDecoderHandles` and
+  `DecoderHandles`** — the pump-loop signal the strategies read
+  from to implement the buffered patch.
+
+### Fixed
+
+- README's "known limitations" note about canvas `buffered` being
+  empty is now gone; replaced with a description of the synthesized
+  approximation.
+
 ## [2.8.4]
 
 Decode-stall detection — the robustness follow-up that addresses the

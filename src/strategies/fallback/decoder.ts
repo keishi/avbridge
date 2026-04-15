@@ -32,6 +32,7 @@ import { dbg } from "../../util/debug.js";
 import {
   sanitizeFrameTimestamp,
   libavFrameToInterleavedFloat32,
+  packetPtsSec,
 } from "../../util/libav-demux.js";
 
 export interface DecoderHandles {
@@ -46,6 +47,13 @@ export interface DecoderHandles {
    */
   setAudioTrack(trackId: number, timeSec: number): Promise<void>;
   stats(): Record<string, unknown>;
+  /**
+   * The demuxer's read-ahead frontier in seconds. See
+   * `HybridDecoderHandles.bufferedUntilSec` for the full contract —
+   * same semantics, same consumer (`<video>.buffered` on canvas
+   * strategies).
+   */
+  bufferedUntilSec(): number;
 }
 
 export interface StartDecoderOptions {
@@ -222,6 +230,7 @@ export async function startDecoder(opts: StartDecoderOptions): Promise<DecoderHa
 
   let packetsRead = 0;
   let videoFramesDecoded = 0;
+  let bufferedUntilSec = 0;
   let audioFramesDecoded = 0;
 
   // Decode-rate watchdog. Samples framesDecoded every second and
@@ -277,6 +286,23 @@ export async function startDecoder(opts: StartDecoderOptions): Promise<DecoderHa
 
       const videoPackets = videoStream ? packets[videoStream.index] : undefined;
       const audioPackets = audioStream ? packets[audioStream.index] : undefined;
+
+      // Track demuxer read-ahead for <video>.buffered on this strategy.
+      // Peek raw pts before sanitizePacketTimestamp (which would
+      // clobber to µs and lose the source-native scale). Monotonic;
+      // seeks don't reset.
+      if (videoPackets && videoTimeBase) {
+        for (const pkt of videoPackets) {
+          const sec = packetPtsSec(pkt, videoTimeBase);
+          if (sec != null && sec > bufferedUntilSec) bufferedUntilSec = sec;
+        }
+      }
+      if (audioPackets && audioTimeBase) {
+        for (const pkt of audioPackets) {
+          const sec = packetPtsSec(pkt, audioTimeBase);
+          if (sec != null && sec > bufferedUntilSec) bufferedUntilSec = sec;
+        }
+      }
 
       // Decode audio BEFORE video. On software-decode-bound content
       // (rv40/mpeg4/wmv3 @ 720p+) a single video batch can take
@@ -615,6 +641,10 @@ export async function startDecoder(opts: StartDecoderOptions): Promise<DecoderHa
       pumpRunning = pumpLoop(newToken).catch((err) =>
         console.error("[avbridge] decoder pump failed (post-seek):", err),
       );
+    },
+
+    bufferedUntilSec() {
+      return bufferedUntilSec;
     },
 
     stats() {

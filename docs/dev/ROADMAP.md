@@ -1,6 +1,6 @@
 # avbridge.js — Roadmap
 
-Current released version: **v2.8.4** (2026-04-15)
+Current released version: **v2.8.5** (2026-04-15)
 
 ## Positioning
 
@@ -277,6 +277,17 @@ against internal state.
   change, focus handoff). Resets the hide timer on any subsequent
   pointer interaction — no flicker.
 
+### v2.8.5 — Buffered TimeRanges on canvas strategies
+
+Released 2026-04-15. Closes the long-standing "buffered is empty on
+hybrid/fallback" gap.
+
+- **`target.buffered` patched** on hybrid + fallback — single
+  `[0, frontier]` range synthesized from the demuxer's highest pts.
+  Seek-bar buffered indicators fill correctly now.
+- **`packetPtsSec` helper** extracted for unit-testable pts
+  conversion, plus `bufferedUntilSec()` on both decoder handles.
+
 ### v2.8.4 — Decode-stall detection
 
 Released 2026-04-15. Unblocks the v2.8.1 "Known deferred" Firefox
@@ -302,8 +313,6 @@ Priorities ordered by adoption value, per the project plan.
 Shipped in v2.6.0: typed event overloads, drag-and-drop, `<track>`
 children, `readyState` + `seekable` for canvas strategies. Still TODO:
 
-- **`buffered` on canvas strategies** — synthesize from decoder-position
-  → media-time. Medium cost; tracked separately.
 - **`networkState`** — needs a transport state machine spanning probe →
   libav reader → decoder. Out-of-scope until a real use case arrives.
 - **PiP passthrough** — wire the browser's native Picture-in-Picture API
@@ -348,13 +357,6 @@ missing from `<avbridge-video>`/`<avbridge-player>` for drop-in use.
   currently only supported in the mediabunny Conversion path.
 - **Multi-track output** — depends on the multi-track roadmap item
   below; no user has asked yet.
-
-### Buffered ranges for canvas strategies
-
-`<avbridge-video>.buffered` returns empty TimeRanges for hybrid and
-fallback. Synthesizing ranges from the decoder's read position would
-give consumers meaningful buffer state (and the seek bar's "buffered"
-indicator would actually fill). UX, not correctness.
 
 ### Subtitle timeline panel
 

@@ -403,7 +403,7 @@ LGPL compliance — see [`NOTICE.md`](./NOTICE.md) and
 - libav.js **threading is disabled** due to known runtime bugs in the v6.8.8 pthreads build — decode runs single-threaded with WASM SIMD acceleration.
 - `transcode()` only accepts mediabunny-readable inputs (MP4/MKV/WebM/OGG/MOV/MP3/FLAC/WAV). AVI/ASF/FLV/RM transcoding means "play it first, record the output" — not yet plumbed.
 - `transcode()` uses **WebCodecs encoders only** — codec availability depends on the browser. AV1 encoding is not yet universal.
-- For the **hybrid and fallback strategies**, `<avbridge-video>.buffered` returns an empty `TimeRanges` because the canvas-based renderers don't track buffered ranges yet. Native and remux strategies expose the full `<video>.buffered` set as expected.
+- For the **hybrid and fallback strategies**, `<avbridge-video>.buffered` exposes a single synthesized `[0, frontier]` range derived from the demuxer's read progress — enough to drive a seek-bar buffered indicator, but not MSE-fidelity per-range availability (decoded frames are consumed in flight on canvas strategies). Native and remux expose the real per-range `<video>.buffered`.
 
 ## Demos
 

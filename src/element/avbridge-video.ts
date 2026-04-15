@@ -683,11 +683,16 @@ export class AvbridgeVideoElement extends HTMLElementCtor {
 
   /**
    * Buffered time ranges for the active source. Mirrors the standard
-   * `<video>.buffered` `TimeRanges` API. For the native and remux strategies
-   * this reflects the underlying SourceBuffer / progressive download state.
-   * For the hybrid and fallback (canvas-rendered) strategies it currently
-   * returns an empty TimeRanges; a future release will synthesize a coarse
-   * range from the decoder's read position.
+   * `<video>.buffered` `TimeRanges` API.
+   *
+   * - **Native / remux:** pass-through to the real `<video>.buffered`
+   *   (reflects the browser's SourceBuffer / progressive-download state).
+   * - **Hybrid / fallback:** a single `[0, frontier]` range synthesized
+   *   from the demuxer's read progress — "how far libav has ever pumped
+   *   packets through." Monotonic; does not shrink on seek. This is an
+   *   approximation, not MSE-fidelity: decoded frames on canvas strategies
+   *   are consumed in flight, so we can't report per-range availability
+   *   the way MSE does. Enough for a seek-bar buffered indicator.
    */
   get buffered(): TimeRanges {
     return this._videoEl.buffered;

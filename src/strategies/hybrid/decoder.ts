@@ -24,6 +24,7 @@ import {
   sanitizePacketTimestamp,
   sanitizeFrameTimestamp,
   libavFrameToInterleavedFloat32,
+  packetPtsSec,
 } from "../../util/libav-demux.js";
 
 export interface HybridDecoderHandles {
@@ -33,6 +34,17 @@ export interface HybridDecoderHandles {
   setAudioTrack(trackId: number, timeSec: number): Promise<void>;
   stats(): Record<string, unknown>;
   onFatalError(handler: (reason: string) => void): void;
+  /**
+   * The demuxer's read-ahead frontier in seconds — the highest pts
+   * observed on any packet handed back from `ff_read_frame_multi`.
+   * Monotonically non-decreasing: seeks don't reset it, since the
+   * frontier represents "how far we've ever demuxed through this
+   * source," which matches what a seek-bar buffered indicator should
+   * show. Backs `<video>.buffered` on canvas strategies. Returns 0
+   * before any valid pts have been seen (some AVI/FLV sources may
+   * never reach this — their `buffered` stays empty).
+   */
+  bufferedUntilSec(): number;
 }
 
 export interface StartHybridDecoderOptions {
@@ -211,6 +223,7 @@ export async function startHybridDecoder(opts: StartHybridDecoderOptions): Promi
   let videoFramesDecoded = 0;
   let audioFramesDecoded = 0;
   let videoChunksFed = 0;
+  let bufferedUntilSec = 0;
 
   let syntheticVideoUs = 0;
   let syntheticAudioUs = 0;
@@ -238,6 +251,24 @@ export async function startHybridDecoder(opts: StartHybridDecoderOptions): Promi
 
       const videoPackets = videoStream ? packets[videoStream.index] : undefined;
       const audioPackets = audioStream ? packets[audioStream.index] : undefined;
+
+      // Track how far the demuxer has read through the source — the
+      // signal behind `<video>.buffered` on this strategy. Peek at raw
+      // packet pts using each stream's native time_base (before the
+      // sanitizePacketTimestamp call later in the loop, which
+      // overwrites to µs). Monotonic: we never walk it backward.
+      if (videoPackets && videoTimeBase) {
+        for (const pkt of videoPackets) {
+          const sec = packetPtsSec(pkt, videoTimeBase);
+          if (sec != null && sec > bufferedUntilSec) bufferedUntilSec = sec;
+        }
+      }
+      if (audioPackets && audioTimeBase) {
+        for (const pkt of audioPackets) {
+          const sec = packetPtsSec(pkt, audioTimeBase);
+          if (sec != null && sec > bufferedUntilSec) bufferedUntilSec = sec;
+        }
+      }
 
       // Decode audio BEFORE video. Same rationale as fallback decoder
       // (POSTMORTEMS.md entry 1, fix #2): audio decode via libav's
@@ -517,6 +548,10 @@ export async function startHybridDecoder(opts: StartHybridDecoderOptions): Promi
       pumpRunning = pumpLoop(newToken).catch((err) =>
         console.error("[avbridge] hybrid pump failed (post-seek):", err),
       );
+    },
+
+    bufferedUntilSec() {
+      return bufferedUntilSec;
     },
 
     stats() {
