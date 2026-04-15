@@ -4,6 +4,18 @@ All notable changes to **avbridge.js** are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.8.3]
+
+### Added
+
+- **`showControls(durationMs?)` on `<avbridge-player>`.** Public method
+  to reveal the auto-hiding chrome (top toolbar + bottom controls)
+  and re-start the auto-hide timer. Intended for app-level "flash the
+  UI" moments like a carousel slide change or focus handoff — one call
+  instead of reaching into `data-controls-hidden`. Custom duration
+  overrides the default 3 s; pointer movement during the flash resets
+  the timer so there's no flicker if the user interacts mid-flash.
+
 ## [2.8.2]
 
 Small ergonomics release driven by downstream `<avbridge-player>`

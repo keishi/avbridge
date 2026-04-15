@@ -680,13 +680,29 @@ export class AvbridgePlayerElement extends HTMLElement {
 
   // ── Controls: auto-hide ────────────────────────────────────────────────
 
-  private _showControls(): void {
+  /**
+   * Reveal the auto-hiding chrome (top toolbar + bottom controls) and
+   * re-start the auto-hide timer. Call this from app-level code to
+   * briefly surface the player UI — e.g. to confirm "you just swiped to
+   * this video" in a carousel, or to flash the title on focus change.
+   *
+   * @param durationMs  How long the chrome stays visible before fading.
+   *                    Defaults to the player's normal 3 s auto-hide.
+   *                    Pointer movement or any other interaction resets
+   *                    the timer, so a user hovering during the flash
+   *                    sees no flicker.
+   */
+  showControls(durationMs?: number): void {
     this.removeAttribute("data-controls-hidden");
     this._toolbarTop.setAttribute("data-visible", "true");
-    this._scheduleHide();
+    this._scheduleHide(durationMs);
   }
 
-  private _scheduleHide(): void {
+  private _showControls(): void {
+    this.showControls();
+  }
+
+  private _scheduleHide(durationMs: number = CONTROLS_HIDE_MS): void {
     if (this._controlsTimer) clearTimeout(this._controlsTimer);
     if (this._state !== "playing" && this._state !== "buffering") return;
     if (this._settingsOpen) return;
@@ -695,7 +711,7 @@ export class AvbridgePlayerElement extends HTMLElement {
         this.setAttribute("data-controls-hidden", "");
         this._toolbarTop.setAttribute("data-visible", "false");
       }
-    }, CONTROLS_HIDE_MS);
+    }, durationMs);
   }
 
   // Strategy is visible in Stats for Nerds, no badge in controls bar.

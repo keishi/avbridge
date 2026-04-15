@@ -1,6 +1,6 @@
 # avbridge.js — Roadmap
 
-Current released version: **v2.8.2** (2026-04-15)
+Current released version: **v2.8.3** (2026-04-15)
 
 ## Positioning
 
@@ -266,6 +266,16 @@ feature set, driven by real-consumer feedback.
   Cover / Fill entries that write the `fit` attribute. Off by default.
 - **`data-visible` on `part="toolbar-top"`** — JS-readable mirror of
   the auto-hide state for slotted toolbar buttons that need it.
+
+### v2.8.3 — `showControls()` public API
+
+Released 2026-04-15. Replaces a workaround consumers were writing
+against internal state.
+
+- **`showControls(durationMs?)` on `<avbridge-player>`.** App-level
+  API to briefly reveal the auto-hiding chrome (carousel slide
+  change, focus handoff). Resets the hide timer on any subsequent
+  pointer interaction — no flicker.
 
 ---
 
