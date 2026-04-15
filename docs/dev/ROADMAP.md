@@ -1,6 +1,6 @@
 # avbridge.js — Roadmap
 
-Current released version: **v2.8.5** (2026-04-15)
+Current released version: **v2.8.6** (2026-04-15)
 
 ## Positioning
 
@@ -288,6 +288,20 @@ hybrid/fallback" gap.
 - **`packetPtsSec` helper** extracted for unit-testable pts
   conversion, plus `bufferedUntilSec()` on both decoder handles.
 
+### v2.8.6 — Cross-browser matrix fully green
+
+Released 2026-04-15. Un-skips the last deferred item.
+
+- **Firefox HEVC playback un-skipped.** Original v2.8.1 skip claimed
+  Firefox's MSE accepted `hev1.*` but the decoder failed silently.
+  Root-cause debug (instrumenting `getVideoPlaybackQuality().totalVideoFrames`)
+  showed Firefox actually decodes HEVC cleanly — the test just sampled
+  before the remux pipeline's 2.5 s cold-start finished. Fix: per-browser
+  `playMs` override of 5000 ms for Firefox HEVC. v2.8.4's watchdog stays
+  in place as defense against any future browser that lies about codec
+  support.
+- **Matrix is 30/0 green** across Chromium, Firefox, WebKit.
+
 ### v2.8.4 — Decode-stall detection
 
 Released 2026-04-15. Unblocks the v2.8.1 "Known deferred" Firefox
@@ -324,17 +338,13 @@ children, `readyState` + `seekable` for canvas strategies. Still TODO:
 
 Tier 4 Playwright infrastructure shipped in v2.7.0 with the
 strategy-decision slice; `playback.spec.ts` landed in v2.8.1; the
-silent-video watchdog landed in v2.8.4 (unblocks the Firefox HEVC
-skip). Still pending:
+silent-video watchdog landed in v2.8.4; Firefox HEVC unskipped in
+v2.8.6 (matrix 30/0 green). Still pending:
 
 - **`contract.spec.ts`**: HTMLMediaElement event + property parity
   across strategies and browsers. Would catch regressions like a
   strategy forgetting to forward `timeupdate` or misreporting
   `readyState`.
-- **Un-skip Firefox HEVC in `playback.spec.ts`** now that the
-  watchdog in v2.8.4 provides an escalation signal. Verify end-to-end
-  that the matrix escalates remux → hybrid / fallback and produces
-  video.
 
 Goal across the whole tier is the same: **avbridge chooses the correct
 strategy and degrades correctly on each browser** — not "every browser

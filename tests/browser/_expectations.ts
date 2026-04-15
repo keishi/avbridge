@@ -108,15 +108,6 @@ export const FIXTURE_EXPECTATIONS: FixtureExpectation[] = [
       firefox: "remux",
       webkit: "remux",
     },
-    // Runtime escalation on Playwright-Chromium: classify picks hybrid,
-    // but WebCodecs HEVC also isn't available in open-source Chromium,
-    // so hybrid fails and we escalate to fallback. Fallback's libav
-    // "avbridge" variant has a software HEVC decoder — playback works.
-    // That's the correct end-to-end degradation.
-    playbackStrategy: {
-      chromium: "fallback",
-      webkit: "remux",
-    },
     // Runtime reality:
     //
     // - **Chromium (open-source / Playwright)**: no HEVC via MSE OR
@@ -126,18 +117,23 @@ export const FIXTURE_EXPECTATIONS: FixtureExpectation[] = [
     //
     // - **WebKit**: hardware HEVC; MSE accepts; remux → native. ✓
     //
-    // - **Firefox**: MSE optimistically reports hev1.* supported even
-    //   though the decoder can't decode it. classify sees MSE=yes and
-    //   returns remux. The v2.8.4 silent-video watchdog is in place
-    //   and has a fallback chain to escalate to, but end-to-end
-    //   escalation isn't reliably happening under Playwright yet —
-    //   audio advances, `totalVideoFrames` behavior under a broken
-    //   decoder needs verification, and the switch execution path
-    //   hasn't been traced. Skipped while that's investigated.
+    // - **Firefox**: HEVC actually decodes (verified via
+    //   `getVideoPlaybackQuality().totalVideoFrames` incrementing —
+    //   earlier "MSE lies, decoder dies silently" assumption was wrong
+    //   on current Firefox/Playwright). Remux pipeline takes ~2.5s to
+    //   warm up, so we need a longer `playMs` to sample after playback
+    //   starts advancing.
     //
     // - **Shipping Chrome** (not Playwright): same as WebKit.
-    skipPlayback: {
-      firefox: "Firefox HEVC remux path still fails to escalate end-to-end under Playwright; v2.8.4 watchdog is in place but detection or switch execution isn't landing — tracked follow-up.",
+    playbackStrategy: {
+      chromium: "fallback",
+      firefox: "remux",
+      webkit: "remux",
+    },
+    playMs: {
+      // Firefox remux cold-start is ~2.5s; default 2000ms would sample
+      // before playback advances. 5s gives margin after first frame.
+      firefox: 5000,
     },
   },
   {

@@ -259,7 +259,10 @@ export function sanitizePacketTimestamp(
  * timestamp earlier in the pump so we can track buffered extent without
  * perturbing the decode path.
  */
-export function packetPtsSec(pkt: LibavPacket, timeBase: [number, number] | undefined): number | null {
+export function packetPtsSec(
+  pkt: Pick<LibavPacket, "pts" | "ptshi">,
+  timeBase: [number, number] | undefined,
+): number | null {
   const lo = pkt.pts ?? 0;
   const hi = pkt.ptshi ?? 0;
   const isInvalid = (hi === -2147483648 && lo === 0) || !Number.isFinite(lo);

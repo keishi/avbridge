@@ -4,6 +4,34 @@ All notable changes to **avbridge.js** are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.8.6]
+
+Un-skips the last deferred Firefox HEVC entry from the cross-browser
+playback matrix. Matrix is now 30/0 green.
+
+### Fixed
+
+- **Firefox HEVC playback test was skipped on a false premise.** The
+  v2.8.1 skip comment claimed Firefox's MSE accepted `hev1.*` but the
+  decoder silently failed; v2.8.4 built a silent-video watchdog to
+  handle that case. Root-cause debugging (instrumenting
+  `getVideoPlaybackQuality().totalVideoFrames` over time) showed Firefox
+  on current Playwright actually **does** decode HEVC — frames increment,
+  no drops, audio+video advance together. The test was sampling at
+  2000ms while the remux pipeline's cold-start takes ~2.5s.
+- **`_expectations.ts` gained a per-browser `playMs` override** (landed
+  in 5219e69 but unused until now). Firefox HEVC uses `playMs: 5000` to
+  sample after playback advances. The v2.8.4 watchdog stays in place
+  as defense against the original failure mode on any future
+  browser/version that does lie about codec support.
+
+### Fixed (typecheck)
+
+- **`packetPtsSec` parameter type narrowed** to
+  `Pick<LibavPacket, "pts" | "ptshi">` — matches what the function
+  actually reads, unblocks the `time-ranges.test.ts` unit tests that
+  pass in minimal packet shapes.
+
 ## [2.8.5]
 
 Buffered ranges on canvas strategies — the seek bar's "buffered"
