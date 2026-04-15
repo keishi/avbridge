@@ -61,10 +61,16 @@ const PROXY_ATTRIBUTES = [
   "fit",
 ] as const;
 
+/** Player-only attributes that don't forward to <avbridge-video>. */
+const PLAYER_ATTRIBUTES = ["show-fit"] as const;
+
+const FIT_MODES = ["contain", "cover", "fill"] as const;
+type FitMode = (typeof FIT_MODES)[number];
+
 // ═══════════════════════════════════════════════════════════════════════════
 
 export class AvbridgePlayerElement extends HTMLElement {
-  static readonly observedAttributes = [...PROXY_ATTRIBUTES];
+  static readonly observedAttributes = [...PROXY_ATTRIBUTES, ...PLAYER_ATTRIBUTES];
 
   // ── Internal DOM refs ──────────────────────────────────────────────────
 
@@ -104,6 +110,7 @@ export class AvbridgePlayerElement extends HTMLElement {
   private _statsInterval: ReturnType<typeof setInterval> | null = null;
   private _eventCleanup: (() => void)[] = [];
   private _updateToolbarEmpty: () => void = () => { /* wired in constructor */ };
+  private _toolbarTop!: HTMLDivElement;
 
   // ── Constructor ────────────────────────────────────────────────────────
 
@@ -133,6 +140,9 @@ export class AvbridgePlayerElement extends HTMLElement {
     this._statsEl = shadow.querySelector(".avp-stats") as HTMLDivElement;
     this._rippleLeft = shadow.querySelector(".avp-ripple-left") as HTMLDivElement;
     this._rippleRight = shadow.querySelector(".avp-ripple-right") as HTMLDivElement;
+    this._toolbarTop = shadow.querySelector('[part="toolbar-top"]') as HTMLDivElement;
+    // Start visible — controls are shown until the auto-hide timer fires.
+    this._toolbarTop.setAttribute("data-visible", "true");
 
     // Track whether the top toolbar has any slotted content. Used to hide
     // its gradient when empty (see data-toolbar-empty in player-styles.ts).
@@ -365,8 +375,15 @@ export class AvbridgePlayerElement extends HTMLElement {
   }
 
   attributeChangedCallback(name: string, _old: string | null, value: string | null): void {
-    // Proxy attributes down to inner avbridge-video
     if (!this._video) return;
+    // Player-only attributes — not forwarded to the inner <avbridge-video>.
+    if ((PLAYER_ATTRIBUTES as readonly string[]).includes(name)) {
+      if (name === "show-fit" && this._settingsOpen) {
+        this._buildSettingsMenu();
+      }
+      return;
+    }
+    // Proxy everything else down.
     if (value == null) this._video.removeAttribute(name);
     else this._video.setAttribute(name, value);
   }
@@ -520,6 +537,20 @@ export class AvbridgePlayerElement extends HTMLElement {
   private _buildSettingsMenu(): void {
     const sections: string[] = [];
 
+    // Fit mode — opt-in via the `show-fit` attribute. Off by default so
+    // chromeless consumers don't get a surprise entry they have to theme
+    // around.
+    if (this.hasAttribute("show-fit")) {
+      const currentFit = (this._video.fit ?? "contain") as FitMode;
+      let fitItems = "";
+      for (const mode of FIT_MODES) {
+        const active = mode === currentFit;
+        const label = mode[0].toUpperCase() + mode.slice(1);
+        fitItems += `<div class="avp-settings-item${active ? " active" : ""}" data-fit="${mode}">${label}</div>`;
+      }
+      sections.push(`<div class="avp-settings-section"><div class="avp-settings-label">Fit</div>${fitItems}</div>`);
+    }
+
     // Playback speed
     const currentRate = this._video.playbackRate ?? 1;
     let speedItems = "";
@@ -556,6 +587,14 @@ export class AvbridgePlayerElement extends HTMLElement {
     this._settingsMenu.innerHTML = sections.join("");
 
     // Bind click handlers
+    for (const item of this._settingsMenu.querySelectorAll("[data-fit]")) {
+      item.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const mode = (item as HTMLElement).dataset.fit as FitMode;
+        this.setAttribute("fit", mode);
+        this._buildSettingsMenu();
+      });
+    }
     for (const item of this._settingsMenu.querySelectorAll("[data-speed]")) {
       item.addEventListener("click", (e) => {
         e.stopPropagation();
@@ -643,6 +682,7 @@ export class AvbridgePlayerElement extends HTMLElement {
 
   private _showControls(): void {
     this.removeAttribute("data-controls-hidden");
+    this._toolbarTop.setAttribute("data-visible", "true");
     this._scheduleHide();
   }
 
@@ -653,6 +693,7 @@ export class AvbridgePlayerElement extends HTMLElement {
     this._controlsTimer = setTimeout(() => {
       if (this._state === "playing") {
         this.setAttribute("data-controls-hidden", "");
+        this._toolbarTop.setAttribute("data-visible", "false");
       }
     }, CONTROLS_HIDE_MS);
   }

@@ -1,6 +1,6 @@
 # avbridge.js — Roadmap
 
-Current released version: **v2.8.1** (2026-04-15)
+Current released version: **v2.8.2** (2026-04-15)
 
 ## Positioning
 
@@ -255,6 +255,17 @@ WebKit. Surfaced and fixed three real bugs in the process.
   black. Needs runtime decode-stall detection (buffered but
   `currentTime` not advancing). Skipped in the matrix, tracked as a
   follow-up.
+
+### v2.8.2 — Downstream-driven chrome ergonomics
+
+Released 2026-04-15. Quality-of-life follow-up to v2.8.0's element
+feature set, driven by real-consumer feedback.
+
+- **Opt-in Fit entry in the `<avbridge-player>` settings menu.** Set
+  `show-fit` on the player and the settings menu gains Contain /
+  Cover / Fill entries that write the `fit` attribute. Off by default.
+- **`data-visible` on `part="toolbar-top"`** — JS-readable mirror of
+  the auto-hide state for slotted toolbar buttons that need it.
 
 ---
 

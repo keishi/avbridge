@@ -343,14 +343,20 @@ Both support:
 
 `<avbridge-player>` also exposes `top-left` and `top-right` slots
 inside its auto-hiding top chrome for consumer buttons (back, title,
-translate, etc.):
+translate, etc.), and an opt-in `show-fit` attribute that adds a
+Contain / Cover / Fill entry to the settings menu:
 
 ```html
-<avbridge-player src="/video.mkv" fit="cover">
+<avbridge-player src="/video.mkv" fit="cover" show-fit>
   <button slot="top-left">← Back</button>
   <button slot="top-right">Translate</button>
 </avbridge-player>
 ```
+
+The toolbar-top `part` exposes a `data-visible="true|false"`
+attribute mirroring the controls auto-hide state — useful if slotted
+buttons need to drive JS behavior (focus, announcements) in sync with
+the fade, not just CSS opacity.
 
 This is a second tsup entry (`dist/element-browser.js`) that inlines
 mediabunny + libavjs-webcodecs-bridge into a single ~1.3 MB file with

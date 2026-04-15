@@ -4,6 +4,25 @@ All notable changes to **avbridge.js** are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.8.2]
+
+Small ergonomics release driven by downstream `<avbridge-player>`
+consumer feedback.
+
+### Added
+
+- **Opt-in "Fit" entry in the `<avbridge-player>` settings menu.** Set
+  the new `show-fit` attribute on `<avbridge-player>` and the settings
+  menu gains a Fit section with Contain / Cover / Fill choices; picking
+  one writes the `fit` attribute (which proxies through to the inner
+  `<avbridge-video>`). Off by default — chromeless consumers don't get
+  a surprise entry.
+- **`data-visible="true|false"` on `part="toolbar-top"`.** Mirrors the
+  controls auto-hide state so slotted toolbar buttons can drive JS
+  behavior (focus management, screen-reader announcements, disabling
+  clicks) without listening to the host's `data-controls-hidden`. The
+  existing CSS fade on opacity is unchanged.
+
 ## [2.8.1]
 
 Cross-browser playback validation — second slice of the v2.7.0 Playwright
