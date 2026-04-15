@@ -51,6 +51,10 @@ export type VideoCodec =
   | "theora"
   | "dv" // DV / DVCPRO (camcorder, MiniDV)
   | "hq_hqa" // Canopus HQ / HQA (Grass Valley intermediate)
+  | "rawvideo" // uncompressed frames
+  | "qtrle" // QuickTime Animation (Apple RLE)
+  | "png" // PNG sequence in MOV
+  | "vp6f" // VP6 Flash variant
   | (string & {});
 
 /** Audio codec families. */
