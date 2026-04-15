@@ -4,6 +4,38 @@ All notable changes to **avbridge.js** are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.8.4]
+
+Decode-stall detection — the robustness follow-up that addresses the
+v2.8.1 "Known deferred" item.
+
+### Added
+
+- **Silent-video watchdog in the stall supervisor.** Catches the class
+  of bug where MSE reports a codec as supported but the decoder can't
+  actually decode it — audio plays, `currentTime` advances, but the
+  video decoder never produces frames. The supervisor now samples
+  `HTMLVideoElement.getVideoPlaybackQuality().totalVideoFrames` (or
+  `webkitDecodedFrameCount` on older Safari) and triggers strategy
+  escalation when audio is advancing but frames haven't for 3 s. The
+  Firefox HEVC case (MSE lies about `hev1.*`) is the motivating
+  example, but the watchdog is codec- and browser-agnostic.
+- **`fallbackChain` on `REMUX_CANDIDATE` classifications.** Previously
+  the supervisor had nowhere to escalate to from a plain remux
+  classification, so stalls sat there forever. The chain is
+  `["hybrid", "fallback"]` (or `["fallback"]` without WebCodecs) —
+  initial strategy is still remux; the chain only engages on stall.
+- **`evaluateDecodeHealth(input)` and `readDecodedFrameCount(target)`
+  extracted as pure helpers** in `src/player.ts` (not re-exported from
+  the package root; same pattern as `buildInitialDecision`) so the
+  supervisor's decision logic is unit-testable without a browser.
+
+### Fixed
+
+- **Firefox HEVC** in `tests/browser/playback.spec.ts` should now
+  un-skip once this ships — the watchdog gives Firefox a mechanism to
+  escalate off the lying MSE path to hybrid / fallback automatically.
+
 ## [2.8.3]
 
 ### Added

@@ -20,6 +20,62 @@ import type {
 } from "./types.js";
 import { AvbridgeError, ERR_PLAYER_NOT_READY, ERR_ALL_STRATEGIES_EXHAUSTED } from "./errors.js";
 
+/**
+ * Decoded-video-frame counter reader. Prefers the standard
+ * `getVideoPlaybackQuality().totalVideoFrames` (all evergreen browsers);
+ * falls back to the WebKit-prefixed `webkitDecodedFrameCount` for older
+ * Safari. Returns 0 for non-video elements or when nothing exposes the
+ * count — the caller treats 0 as "no signal" (constant across samples,
+ * which is fine).
+ */
+export function readDecodedFrameCount(target: HTMLMediaElement): number {
+  if (typeof HTMLVideoElement === "undefined" || !(target instanceof HTMLVideoElement)) return 0;
+  const vq = (target as HTMLVideoElement & { getVideoPlaybackQuality?: () => { totalVideoFrames: number } }).getVideoPlaybackQuality;
+  if (typeof vq === "function") {
+    try { return vq.call(target).totalVideoFrames; } catch { /* fall through */ }
+  }
+  const legacy = (target as HTMLVideoElement & { webkitDecodedFrameCount?: number }).webkitDecodedFrameCount;
+  return typeof legacy === "number" ? legacy : 0;
+}
+
+/**
+ * Pure decision function for the stall supervisor. Takes a snapshot of
+ * the observable state and returns whether to escalate. Extracted so it
+ * can be unit-tested without spinning up a real player / media element.
+ *
+ * - `time-stall`: `currentTime` hasn't moved for `timeStallThresholdMs`
+ *   despite the element being in a state where it should be playing.
+ * - `silent-video`: the media has a video track, `currentTime` is
+ *   advancing (audio is playing), but the decoder has produced no new
+ *   frames for `frameStallThresholdMs`. Catches Firefox-style "MSE
+ *   reports codec supported but the decoder can't actually decode it".
+ */
+export function evaluateDecodeHealth(input: {
+  hasVideoTrack: boolean;
+  timeAdvanced: boolean;
+  framesAdvanced: boolean;
+  now: number;
+  lastProgressTime: number;
+  lastFrameProgressTime: number;
+  timeStallThresholdMs?: number;
+  frameStallThresholdMs?: number;
+}): { escalate: false } | { escalate: true; kind: "time-stall" | "silent-video" } {
+  const timeThreshold = input.timeStallThresholdMs ?? 5000;
+  const frameThreshold = input.frameStallThresholdMs ?? 3000;
+  if (!input.timeAdvanced && input.now - input.lastProgressTime > timeThreshold) {
+    return { escalate: true, kind: "time-stall" };
+  }
+  if (
+    input.hasVideoTrack &&
+    input.timeAdvanced &&
+    !input.framesAdvanced &&
+    input.now - input.lastFrameProgressTime > frameThreshold
+  ) {
+    return { escalate: true, kind: "silent-video" };
+  }
+  return { escalate: false };
+}
+
 export class UnifiedPlayer {
   private emitter = new TypedEmitter<PlayerEventMap>();
   private session: PlaybackSession | null = null;
@@ -34,6 +90,13 @@ export class UnifiedPlayer {
   private stallTimer: ReturnType<typeof setInterval> | null = null;
   private lastProgressTime = 0;
   private lastProgressPosition = -1;
+  /** Last observed `HTMLVideoElement.getVideoPlaybackQuality().totalVideoFrames`
+   *  (or `webkitDecodedFrameCount` fallback). Used by the silent-video
+   *  watchdog — catches cases where `currentTime` advances (audio plays)
+   *  but the decoder produces no frames, e.g. Firefox claiming `hev1.*`
+   *  via MSE when the decoder actually can't decode HEVC. */
+  private lastVideoFrameCount = 0;
+  private lastVideoFrameProgressTime = 0;
   private errorListener: (() => void) | null = null;
 
   // Bound so we can removeEventListener in destroy(); without this the
@@ -351,23 +414,48 @@ export class UnifiedPlayer {
       // Monitor currentTime progress
       this.lastProgressPosition = this.options.target.currentTime;
       this.lastProgressTime = performance.now();
+      this.lastVideoFrameCount = readDecodedFrameCount(this.options.target);
+      this.lastVideoFrameProgressTime = performance.now();
+
+      const hasVideoTrack = (this.mediaContext?.videoTracks.length ?? 0) > 0;
 
       this.stallTimer = setInterval(() => {
         const t = this.options.target;
+        const now = performance.now();
         if (t.paused || t.ended || t.readyState < 2) {
           this.lastProgressPosition = t.currentTime;
-          this.lastProgressTime = performance.now();
+          this.lastProgressTime = now;
+          this.lastVideoFrameCount = readDecodedFrameCount(t);
+          this.lastVideoFrameProgressTime = now;
           return;
         }
-        if (t.currentTime !== this.lastProgressPosition) {
+        const timeAdvanced = t.currentTime !== this.lastProgressPosition;
+        const frames = readDecodedFrameCount(t);
+        const framesAdvanced = frames > this.lastVideoFrameCount;
+
+        const health = evaluateDecodeHealth({
+          hasVideoTrack,
+          timeAdvanced,
+          framesAdvanced,
+          now,
+          lastProgressTime: this.lastProgressTime,
+          lastFrameProgressTime: this.lastVideoFrameProgressTime,
+        });
+
+        if (timeAdvanced) {
           this.lastProgressPosition = t.currentTime;
-          this.lastProgressTime = performance.now();
-          return;
+          this.lastProgressTime = now;
         }
-        if (performance.now() - this.lastProgressTime > 5000) {
-          void this.escalate(
-            `${strategy} strategy stalled for 5s at ${t.currentTime.toFixed(1)}s`,
-          );
+        if (framesAdvanced) {
+          this.lastVideoFrameCount = frames;
+          this.lastVideoFrameProgressTime = now;
+        }
+
+        if (health.escalate) {
+          const reason = health.kind === "time-stall"
+            ? `${strategy} strategy stalled for 5s at ${t.currentTime.toFixed(1)}s`
+            : `${strategy} strategy: audio is advancing but the video decoder has produced no new frames for 3s — likely a silent codec failure`;
+          void this.escalate(reason);
         }
       }, 1000);
 

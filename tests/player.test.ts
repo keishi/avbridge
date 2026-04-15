@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, vi } from "vitest";
-import { buildInitialDecision, decideVisibilityAction } from "../src/player.js";
+import { buildInitialDecision, decideVisibilityAction, evaluateDecodeHealth, readDecodedFrameCount } from "../src/player.js";
 import { SubtitleResourceBag } from "../src/subtitles/index.js";
 import { Diagnostics } from "../src/diagnostics.js";
 import type { MediaContext } from "../src/types.js";
@@ -281,5 +281,124 @@ describe("SubtitleResourceBag (regression: blob URL leak)", () => {
     bag.createObjectURL(new Blob(["a"]));
     bag.revokeAll();
     expect(() => bag.revokeAll()).not.toThrow();
+  });
+});
+
+describe("evaluateDecodeHealth (stall supervisor pure decision)", () => {
+  const base = {
+    hasVideoTrack: true,
+    timeAdvanced: true,
+    framesAdvanced: true,
+    now: 10_000,
+    lastProgressTime: 10_000,
+    lastFrameProgressTime: 10_000,
+  };
+
+  it("returns no escalation while everything is advancing", () => {
+    expect(evaluateDecodeHealth(base)).toEqual({ escalate: false });
+  });
+
+  it("flags time-stall when currentTime hasn't moved for >5s", () => {
+    const r = evaluateDecodeHealth({
+      ...base,
+      timeAdvanced: false,
+      lastProgressTime: 10_000,
+      now: 15_500,
+    });
+    expect(r).toEqual({ escalate: true, kind: "time-stall" });
+  });
+
+  it("does not flag time-stall before the threshold", () => {
+    expect(evaluateDecodeHealth({
+      ...base,
+      timeAdvanced: false,
+      lastProgressTime: 10_000,
+      now: 14_000,
+    })).toEqual({ escalate: false });
+  });
+
+  it("flags silent-video when audio advances but frames don't (>3s)", () => {
+    const r = evaluateDecodeHealth({
+      ...base,
+      timeAdvanced: true,
+      framesAdvanced: false,
+      lastFrameProgressTime: 10_000,
+      now: 13_500,
+    });
+    expect(r).toEqual({ escalate: true, kind: "silent-video" });
+  });
+
+  it("does not flag silent-video on audio-only sources", () => {
+    expect(evaluateDecodeHealth({
+      ...base,
+      hasVideoTrack: false,
+      framesAdvanced: false,
+      lastFrameProgressTime: 10_000,
+      now: 20_000,
+    })).toEqual({ escalate: false });
+  });
+
+  it("does not flag silent-video before the threshold", () => {
+    expect(evaluateDecodeHealth({
+      ...base,
+      framesAdvanced: false,
+      lastFrameProgressTime: 10_000,
+      now: 12_500,
+    })).toEqual({ escalate: false });
+  });
+
+  it("does not flag silent-video when currentTime is also stuck (time-stall wins first)", () => {
+    const r = evaluateDecodeHealth({
+      ...base,
+      timeAdvanced: false,
+      framesAdvanced: false,
+      lastProgressTime: 10_000,
+      lastFrameProgressTime: 10_000,
+      now: 20_000,
+    });
+    expect(r).toEqual({ escalate: true, kind: "time-stall" });
+  });
+
+  it("honors custom thresholds", () => {
+    expect(evaluateDecodeHealth({
+      ...base,
+      timeAdvanced: false,
+      lastProgressTime: 10_000,
+      now: 11_500,
+      timeStallThresholdMs: 1000,
+    })).toEqual({ escalate: true, kind: "time-stall" });
+
+    expect(evaluateDecodeHealth({
+      ...base,
+      framesAdvanced: false,
+      lastFrameProgressTime: 10_000,
+      now: 10_500,
+      frameStallThresholdMs: 250,
+    })).toEqual({ escalate: true, kind: "silent-video" });
+  });
+});
+
+describe("readDecodedFrameCount", () => {
+  it("returns 0 for an audio-only HTMLAudioElement", () => {
+    const a = document.createElement("audio");
+    expect(readDecodedFrameCount(a)).toBe(0);
+  });
+
+  it("reads totalVideoFrames via getVideoPlaybackQuality when available", () => {
+    const v = document.createElement("video");
+    Object.defineProperty(v, "getVideoPlaybackQuality", {
+      configurable: true,
+      value: () => ({ totalVideoFrames: 42 }),
+    });
+    expect(readDecodedFrameCount(v)).toBe(42);
+  });
+
+  it("falls back to webkitDecodedFrameCount", () => {
+    const v = document.createElement("video");
+    Object.defineProperty(v, "webkitDecodedFrameCount", {
+      configurable: true,
+      value: 17,
+    });
+    expect(readDecodedFrameCount(v)).toBe(17);
   });
 });

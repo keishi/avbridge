@@ -1,6 +1,6 @@
 # avbridge.js — Roadmap
 
-Current released version: **v2.8.3** (2026-04-15)
+Current released version: **v2.8.4** (2026-04-15)
 
 ## Positioning
 
@@ -277,6 +277,20 @@ against internal state.
   change, focus handoff). Resets the hide timer on any subsequent
   pointer interaction — no flicker.
 
+### v2.8.4 — Decode-stall detection
+
+Released 2026-04-15. Unblocks the v2.8.1 "Known deferred" Firefox
+HEVC skip and hardens remux against any future "MSE lies about codec
+support" scenario.
+
+- **Silent-video watchdog** in the stall supervisor: if audio is
+  advancing but the decoder's `totalVideoFrames` hasn't moved for 3 s,
+  escalate.
+- **`fallbackChain` on `REMUX_CANDIDATE`** so escalation has somewhere
+  to go (hybrid → fallback) instead of sitting stalled forever.
+- **`evaluateDecodeHealth` / `readDecodedFrameCount`** exported for
+  unit-testable supervisor logic.
+
 ---
 
 ## Near term — ergonomics + confidence
@@ -300,19 +314,18 @@ children, `readyState` + `seekable` for canvas strategies. Still TODO:
 ### Cross-browser testing follow-ups
 
 Tier 4 Playwright infrastructure shipped in v2.7.0 with the
-strategy-decision slice; `playback.spec.ts` landed in v2.8.1. Still
-pending:
+strategy-decision slice; `playback.spec.ts` landed in v2.8.1; the
+silent-video watchdog landed in v2.8.4 (unblocks the Firefox HEVC
+skip). Still pending:
 
 - **`contract.spec.ts`**: HTMLMediaElement event + property parity
   across strategies and browsers. Would catch regressions like a
   strategy forgetting to forward `timeupdate` or misreporting
   `readyState`.
-- **Decode-stall detection**: Firefox's MSE optimistically reports
-  `hev1.*` as supported but the decoder can't actually decode —
-  audio plays, video is black, no escalation signal reaches the
-  player. A "buffered but `currentTime` not advancing for N seconds"
-  watchdog would let the matrix un-skip Firefox HEVC and protect
-  against similar lies from future browser versions.
+- **Un-skip Firefox HEVC in `playback.spec.ts`** now that the
+  watchdog in v2.8.4 provides an escalation signal. Verify end-to-end
+  that the matrix escalates remux → hybrid / fallback and produces
+  video.
 
 Goal across the whole tier is the same: **avbridge chooses the correct
 strategy and degrades correctly on each browser** — not "every browser

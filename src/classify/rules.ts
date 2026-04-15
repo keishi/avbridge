@@ -4,6 +4,7 @@ import type {
   Classification,
   ContainerKind,
   MediaContext,
+  StrategyName,
   VideoCodec,
   VideoTrackInfo,
 } from "../types.js";
@@ -218,10 +219,18 @@ export function classifyContext(ctx: MediaContext): Classification {
         reason: `${ctx.container} container with ${video.codec}${audio ? "/" + audio.codec : ""}; MSE rejects the remux target mime and WebCodecs is unavailable — falling back to WASM decode`,
       };
     }
+    // Give REMUX_CANDIDATE a fallback chain so the runtime stall / decode
+    // supervisors have somewhere to escalate to when MSE lies about codec
+    // support (the Firefox HEVC case — audio plays, video never paints).
+    // The initial pick is still remux; these only engage on stall.
+    const fallbackChain: StrategyName[] = webCodecsAvailable()
+      ? ["hybrid", "fallback"]
+      : ["fallback"];
     return {
       class: "REMUX_CANDIDATE",
       strategy: "remux",
       reason: `${ctx.container} container with native-supported codecs — remux to fragmented MP4 for reliable playback`,
+      fallbackChain,
     };
   }
 
