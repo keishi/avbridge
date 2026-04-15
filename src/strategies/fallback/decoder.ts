@@ -59,7 +59,16 @@ export interface StartDecoderOptions {
 }
 
 export async function startDecoder(opts: StartDecoderOptions): Promise<DecoderHandles> {
-  const variant: LibavVariant = pickLibavVariant(opts.context);
+  // Fallback always does full software decode. The "webcodecs" libav
+  // variant is trimmed to demuxing + WebCodecs-companion use; it lacks
+  // software decoders for codecs whose browsers usually handle them
+  // (e.g. h265). When we've reached fallback for those codecs, it's
+  // precisely because the browser *can't* decode them — so we need
+  // the full "avbridge" variant with software decoders. pickLibavVariant
+  // is still right for the hybrid strategy (which software-decodes only
+  // audio and relies on WebCodecs for video), but not here.
+  const variant: LibavVariant = "avbridge";
+  void pickLibavVariant; // kept in scope for future opt-in use
   const libav = (await loadLibav(variant)) as unknown as LibavRuntime;
   const bridge = await loadBridge();
 
@@ -137,13 +146,11 @@ export async function startDecoder(opts: StartDecoderOptions): Promise<DecoderHa
       videoStream ? `video: ${opts.context.videoTracks[0]?.codec ?? "unknown"}` : null,
       audioStream ? `audio: ${opts.context.audioTracks[0]?.codec ?? "unknown"}` : null,
     ].filter(Boolean).join(", ");
-    const hint = variant === "webcodecs"
-      ? ` The "${variant}" libav variant does not include software decoders for these codecs. ` +
-        `Try the custom "avbridge" variant (scripts/build-libav.sh) for broader codec support, ` +
-        `or use a lighter strategy (native, remux, hybrid) instead.`
-      : "";
     throw new Error(
-      `fallback decoder: could not initialize any libav decoders (${codecs}).${hint}`,
+      `fallback decoder: could not initialize any libav decoders (${codecs}). ` +
+      `The "${variant}" libav variant lacks software decoders for these codecs — ` +
+      `rebuild with scripts/build-libav.sh including the missing decoder, ` +
+      `or use a lighter strategy (native, remux, hybrid) instead.`,
     );
   }
 

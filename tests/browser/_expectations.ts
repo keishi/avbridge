@@ -24,11 +24,24 @@ export interface FixtureExpectation {
   /** Audio codec that probe() should detect (first audio track). */
   audioCodec: string;
   /**
-   * Strategy per browser. If a browser isn't listed, the test is skipped
-   * for that browser (useful for codecs we know we can't verify on a
-   * given engine yet).
+   * **Initial** strategy classify() picks per browser. Used by
+   * fixtures.spec.ts. classify() is browser-independent for most paths,
+   * so these often agree across browsers — that's the point.
    */
   strategy: Partial<Record<BrowserName, StrategyName>>;
+  /**
+   * **Runtime** strategy used after escalation, per browser. Used by
+   * playback.spec.ts. Defaults to `strategy` when undefined for a
+   * browser. Only override when runtime escalation differs from the
+   * initial pick — e.g. Firefox escalating HEVC MKV from remux →
+   * fallback because MSE rejects hevc1.*.
+   */
+  playbackStrategy?: Partial<Record<BrowserName, StrategyName>>;
+  /**
+   * Skip playback testing on these browsers. Use sparingly and with a
+   * comment in the entry — e.g. WebKit known-flaky on a given codec.
+   */
+  skipPlayback?: Partial<Record<BrowserName, string>>;
 }
 
 /**
@@ -79,14 +92,41 @@ export const FIXTURE_EXPECTATIONS: FixtureExpectation[] = [
     container: "mkv",
     videoCodec: "h265",  // avbridge uses "h265" as the internal codec name
     audioCodec: "aac",
-    // classify() is browser-independent for MKV + h265 (REMUXABLE_CONTAINER
-    // + NATIVE_VIDEO_CODECS path). Per-browser escalation (Firefox → fallback
-    // when MSE rejects HEVC) happens at runtime and is validated in
-    // playback.spec.ts, not here.
+    // classify() is browser-sensitive for this codec combo: it calls
+    // MediaSource.isTypeSupported for the remux target mime and routes
+    // to hybrid when MSE rejects.
     strategy: {
-      chromium: "remux",
+      chromium: "hybrid",
       firefox: "remux",
       webkit: "remux",
+    },
+    // Runtime escalation on Playwright-Chromium: classify picks hybrid,
+    // but WebCodecs HEVC also isn't available in open-source Chromium,
+    // so hybrid fails and we escalate to fallback. Fallback's libav
+    // "avbridge" variant has a software HEVC decoder — playback works.
+    // That's the correct end-to-end degradation.
+    playbackStrategy: {
+      chromium: "fallback",
+      webkit: "remux",
+    },
+    // Runtime reality:
+    //
+    // - **Chromium (open-source / Playwright)**: no HEVC via MSE OR
+    //   WebCodecs (open-source build lacks proprietary codecs). Double
+    //   degrade: classify→hybrid (MSE says no) → hybrid fails (WebCodecs
+    //   says no) → fallback (libav software decode). ✓
+    //
+    // - **WebKit**: hardware HEVC; MSE accepts; remux → native. ✓
+    //
+    // - **Firefox**: MSE optimistically reports hev1.* supported even
+    //   though the decoder can't decode it. classify sees MSE=yes and
+    //   returns remux. At runtime audio plays but video is black;
+    //   needs decode-stall detection in the remux pipeline to
+    //   escalate. Skipping playback for firefox until that lands.
+    //
+    // - **Shipping Chrome** (not Playwright): same as WebKit.
+    skipPlayback: {
+      firefox: "Firefox MSE accepts HEVC but can't decode it; needs decode-stall detection (follow-up)",
     },
   },
   {

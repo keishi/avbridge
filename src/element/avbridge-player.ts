@@ -103,6 +103,7 @@ export class AvbridgePlayerElement extends HTMLElement {
   private _statsEl!: HTMLDivElement;
   private _statsInterval: ReturnType<typeof setInterval> | null = null;
   private _eventCleanup: (() => void)[] = [];
+  private _updateToolbarEmpty: () => void = () => { /* wired in constructor */ };
 
   // ── Constructor ────────────────────────────────────────────────────────
 
@@ -135,14 +136,15 @@ export class AvbridgePlayerElement extends HTMLElement {
 
     // Track whether the top toolbar has any slotted content. Used to hide
     // its gradient when empty (see data-toolbar-empty in player-styles.ts).
+    // MUST defer the initial attribute write to connectedCallback — the
+    // Custom Elements spec forbids constructors from adding attributes.
     const slots = shadow.querySelectorAll<HTMLSlotElement>('slot[name="top-left"], slot[name="top-right"]');
-    const updateToolbarEmpty = () => {
+    this._updateToolbarEmpty = () => {
       const hasContent = Array.from(slots).some((s) => s.assignedNodes({ flatten: true }).length > 0);
       if (hasContent) this.removeAttribute("data-toolbar-empty");
       else this.setAttribute("data-toolbar-empty", "");
     };
-    updateToolbarEmpty();
-    for (const s of slots) s.addEventListener("slotchange", updateToolbarEmpty);
+    for (const s of slots) s.addEventListener("slotchange", this._updateToolbarEmpty);
 
     this._bindEvents();
   }
@@ -348,14 +350,14 @@ export class AvbridgePlayerElement extends HTMLElement {
 
   connectedCallback(): void {
     this._setState("idle");
-    // Make focusable for keyboard events. Must be deferred to
-    // connectedCallback — the Custom Elements spec forbids constructors
-    // from adding attributes (document.createElement rejects with
-    // "The result must not have attributes"), which the Playwright
-    // cross-browser tests caught.
+    // Attribute writes the Custom Elements spec forbids in constructors
+    // — document.createElement rejects with "The result must not have
+    // attributes" — deferred here. Surfaced by the Playwright
+    // cross-browser tests.
     if (!this.hasAttribute("tabindex")) {
       this.setAttribute("tabindex", "0");
     }
+    this._updateToolbarEmpty();
   }
 
   disconnectedCallback(): void {

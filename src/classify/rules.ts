@@ -195,6 +195,29 @@ export function classifyContext(ctx: MediaContext): Classification {
   // Remuxing goes through mediabunny, which only supports certain containers.
   // AVI/ASF/FLV are NOT in that set — mediabunny rejects them at Input().
   if (REMUXABLE_CONTAINERS.has(ctx.container)) {
+    // Feature-detect: the remux target is fragmented MP4 via MSE. If the
+    // browser's MSE can't decode this codec combo (e.g. HEVC on
+    // open-source Chromium — no proprietary codecs by design — or
+    // future codec/container combos we haven't thought of), remux will
+    // stall. Degrade gracefully: try hybrid (WebCodecs hardware decode)
+    // or fallback (WASM software decode) without waiting for runtime
+    // escalation.
+    const mime = mp4MimeFor(video, audio);
+    if (mime && typeof MediaSource !== "undefined" && !mseSupports(mime)) {
+      if (webCodecsAvailable()) {
+        return {
+          class: "HYBRID_CANDIDATE",
+          strategy: "hybrid",
+          reason: `${ctx.container} container with ${video.codec}${audio ? "/" + audio.codec : ""}; MSE rejects the remux target mime — routing to WebCodecs hardware decode`,
+          fallbackChain: ["fallback"],
+        };
+      }
+      return {
+        class: "FALLBACK_REQUIRED",
+        strategy: "fallback",
+        reason: `${ctx.container} container with ${video.codec}${audio ? "/" + audio.codec : ""}; MSE rejects the remux target mime and WebCodecs is unavailable — falling back to WASM decode`,
+      };
+    }
     return {
       class: "REMUX_CANDIDATE",
       strategy: "remux",

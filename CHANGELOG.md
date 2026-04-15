@@ -4,6 +4,55 @@ All notable changes to **avbridge.js** are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.8.1]
+
+Cross-browser playback validation — second slice of the v2.7.0 Playwright
+tier. Bootstrap → play → destroy lifecycle tested across Chromium,
+Firefox, and WebKit. Surfaced and fixed three real bugs along the way:
+
+### Fixed
+
+- **`<avbridge-player>` constructor violated the Custom Elements spec**
+  by setting attributes (`tabindex`, `data-toolbar-empty`) on `this`.
+  Browsers allow this when the parser constructs the element, but
+  `document.createElement("avbridge-player")` fails with "The result
+  must not have attributes" — so programmatic creation, including all
+  Playwright tests, was broken. Moved attribute writes to
+  `connectedCallback`. Caught by the new browser matrix.
+- **classify() didn't feature-detect MSE for remuxable non-native
+  containers.** On open-source Chromium (no proprietary codecs),
+  MKV+HEVC was classified as `remux` even though MSE rejected the
+  target mime — playback stalled silently. classify() now calls
+  `MediaSource.isTypeSupported()` for the remux target and gracefully
+  degrades to hybrid/fallback when it says no.
+- **Fallback strategy was loading the wrong libav variant for some
+  codecs.** `pickLibavVariant` would choose the "webcodecs" companion
+  variant (smaller, assumes the browser decodes natively) for codecs
+  like HEVC — but fallback does *full* software decode, and that
+  variant lacks HEVC's software decoder. Fallback now unconditionally
+  loads the "avbridge" variant, which is correct since we're there
+  specifically because the browser can't decode.
+
+### Added
+
+- **`tests/browser/playback.spec.ts`** — bootstrap → play → destroy per
+  fixture per browser. Asserts playback actually advances (either via
+  audio-clock `currentTime` for native/remux, or `framesPainted` for
+  canvas strategies) and that the runtime strategy after escalation
+  matches the per-browser matrix. 29 passed, 1 skipped (documented).
+- **`playbackStrategy` field on `_expectations.ts`** for codifying
+  per-browser runtime expectations distinct from initial classify
+  output. Firefox HEVC is the one skip, pending a decode-stall
+  detection follow-up.
+
+### Known deferred
+
+- **Firefox HEVC**: MSE optimistically reports `hev1.*` supported but
+  the decoder can't decode it. Audio plays, video is black. No signal
+  currently reaches escalation. Runtime decode-stall detection
+  (buffered but `currentTime` not advancing) is the right fix; tracked
+  as a follow-up, skipped in the matrix for now.
+
 ## [2.8.0]
 
 Element feature release — fit mode, consumer-slotted toolbar chrome, and

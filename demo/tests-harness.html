@@ -3,27 +3,29 @@
   <head>
     <meta charset="UTF-8" />
     <title>avbridge — tests harness</title>
+    <style>
+      html, body { margin: 0; padding: 0; background: #000; }
+      #player-mount { width: 640px; height: 360px; }
+      #player-mount avbridge-player { width: 100%; height: 100%; display: block; }
+    </style>
   </head>
   <body>
     <!--
-      Minimal harness used by the Playwright cross-browser tests
+      Minimal harness for the Playwright cross-browser tests
       (tests/browser/*.spec.ts). Exposes the avbridge API on
-      `window.avbridge` so tests can call probe() / classify() directly
-      from page.evaluate() without wiring a dedicated UI.
+      `window.avbridge` and mounts an `<avbridge-player>` so tests can
+      drive real playback from `page.evaluate()`.
 
-      Not linked from the main demo; only loaded via Playwright.
+      Not linked from the main demo; only loaded by Playwright.
+      See ./tests-harness.ts for the module body.
     -->
+    <div id="player-mount"></div>
     <script>
       // Route libav variant loads through the Vite plugin at /libav/*.
       // MUST be set before the ES module below loads avbridge — see
       // CLAUDE.md "three libav path-resolution environments".
       window.AVBRIDGE_LIBAV_BASE = "/libav";
     </script>
-    <script type="module">
-      import { probe, classify } from "avbridge";
-      window.avbridge = { probe, classify };
-      // Signal readiness — tests wait for this.
-      window.__avbridgeReady = true;
-    </script>
+    <script type="module" src="./tests-harness.ts"></script>
   </body>
 </html>
