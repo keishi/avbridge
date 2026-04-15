@@ -49,6 +49,79 @@ AVI (DivX)       → fallback  → smooth software decode
 RMVB (rv40/cook) → fallback  → libav software decode
 ```
 
+## Supported formats
+
+avbridge plays anything in this matrix. Files outside it report the
+unrecognized codec/container in the classifier diagnostics — open an
+issue with a sample so we can route it.
+
+### Containers
+
+| Container | Strategy when codecs are native | Notes |
+|---|---|---|
+| **MP4 / M4V** | native | Direct `<video src>` |
+| **MOV** | native | QuickTime |
+| **WebM** | native | VP8/VP9/AV1 + Opus/Vorbis |
+| **OGG / OGV** | native | Theora + Vorbis (audio also native) |
+| **WAV / MP3 / FLAC / ADTS** | native (audio-only) | |
+| **MKV / Matroska** | remux | mediabunny → fMP4 → MSE |
+| **MPEG-TS / M2TS / MTS** | remux | HLS-only natively, so always remuxed |
+| **AVI / DivX / Xvid** | hybrid | libav demux + WebCodecs decode |
+| **ASF / WMV** | hybrid or fallback | libav demux; codec decides decoder |
+| **FLV / F4V** | hybrid or fallback | libav demux; codec decides decoder |
+| **RM / RMVB** | fallback | libav demux + software decode |
+| **3GP / 3G2** | native or remux | Treated as MP4 family |
+
+### Video codecs
+
+| Codec | Strategy | Source |
+|---|---|---|
+| **H.264 / AVC** (Baseline, Main, High, 4:2:0 8-bit) | native | hardware |
+| **H.265 / HEVC** | native (Safari, Edge), remux/hybrid (Chrome via WebCodecs) | hardware |
+| **VP8** | native | hardware |
+| **VP9** | native | hardware |
+| **AV1** | native | hardware |
+| **H.264 Hi10 / 4:2:2 / 4:4:4** | remux → fallback on stall | mixed |
+| **MPEG-4 Part 2** (DivX, Xvid, MS-MPEG-4 v1/v2/v3) | fallback | libav.js |
+| **WMV1 / WMV2 / WMV3** | fallback | libav.js |
+| **VC-1** | fallback | libav.js |
+| **MPEG-1 / MPEG-2** | fallback | libav.js |
+| **Theora** | fallback | libav.js |
+| **RealVideo 1/2/3/4** (rv10/20/30/40) | fallback | libav.js |
+| **H.263 / H.263+** | fallback | libav.js |
+| **Sorenson Video 1/3** (svq1/svq3) | fallback | libav.js |
+| **FLV1 (Sorenson Spark)** | fallback | libav.js |
+| **VP6 / VP6F** (Flash) | fallback | libav.js |
+| **DV / DVCPRO** (camcorder, MiniDV) | fallback | libav.js |
+| **Canopus HQ / HQA** (Grass Valley) | fallback | libav.js |
+| **Cinepak** | fallback | libav.js |
+| **MJPEG** | fallback | libav.js |
+| **rawvideo** (uncompressed) | fallback | libav.js |
+| **QuickTime Animation (qtrle)** | fallback | libav.js |
+| **PNG-in-MOV sequences** | fallback | libav.js |
+
+### Audio codecs
+
+| Codec | Strategy | Notes |
+|---|---|---|
+| **AAC** (LC, HE) | native | |
+| **MP3** | native | |
+| **Opus** | native | |
+| **Vorbis** | native | |
+| **FLAC** | native | |
+| **PCM** (s16le, s24le) | native | |
+| **AC-3 / E-AC-3 (Dolby Digital)** | hybrid (libav software audio + WebCodecs video) | |
+| **DTS / DTS-HD / TrueHD** | hybrid or fallback | |
+| **WMA v1 / v2 / Pro** (wmav1/wmav2/wmapro) | fallback | |
+| **Cook / RealAudio sipr / atrac3 / ra_144 / ra_288** | fallback | |
+| **MP2** | fallback | |
+| **ADPCM** (IMA, MS) | fallback | |
+| **PCM A-law / μ-law / u8** | fallback | |
+
+### Subtitles
+
+SRT (and SSA/ASS via the parser) — see `<avbridge-player>` track UI.
+
 ## Quick start
 
 ### Playback
