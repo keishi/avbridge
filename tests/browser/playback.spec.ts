@@ -45,8 +45,9 @@ for (const expectation of FIXTURE_EXPECTATIONS) {
 
     const fixturePath = resolve(FIXTURES_DIR, expectation.fixture);
     const fixtureUrl = `/@fs${fixturePath}`;
+    const playMs = expectation.playMs?.[browser];
 
-    const result = await page.evaluate(async (url) => {
+    const result = await page.evaluate(async ({ url, playMs }) => {
       const api = (window as unknown as {
         avbridge: {
           loadAndPlay: (url: string, opts?: { playMs?: number }) => Promise<{
@@ -60,11 +61,14 @@ for (const expectation of FIXTURE_EXPECTATIONS) {
         };
       }).avbridge;
       try {
-        return { ok: true as const, value: await api.loadAndPlay(url) };
+        return {
+          ok: true as const,
+          value: await api.loadAndPlay(url, playMs != null ? { playMs } : undefined),
+        };
       } catch (err) {
         return { ok: false as const, error: (err as Error).message };
       }
-    }, fixtureUrl);
+    }, { url: fixtureUrl, playMs });
 
     if (!result.ok) {
       // Attach the failure to the report so a CI run shows what broke

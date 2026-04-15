@@ -42,6 +42,14 @@ export interface FixtureExpectation {
    * comment in the entry — e.g. WebKit known-flaky on a given codec.
    */
   skipPlayback?: Partial<Record<BrowserName, string>>;
+  /**
+   * How long to let playback run before sampling, per browser. Default
+   * is 2000 ms. Override to give the stall supervisor's 3 s silent-video
+   * watchdog room to fire (e.g. Firefox HEVC, where MSE accepts the
+   * codec but the decoder can't decode it — escalation only happens
+   * after the watchdog notices audio advancing without frames).
+   */
+  playMs?: Partial<Record<BrowserName, number>>;
 }
 
 /**
@@ -120,13 +128,16 @@ export const FIXTURE_EXPECTATIONS: FixtureExpectation[] = [
     //
     // - **Firefox**: MSE optimistically reports hev1.* supported even
     //   though the decoder can't decode it. classify sees MSE=yes and
-    //   returns remux. At runtime audio plays but video is black;
-    //   needs decode-stall detection in the remux pipeline to
-    //   escalate. Skipping playback for firefox until that lands.
+    //   returns remux. The v2.8.4 silent-video watchdog is in place
+    //   and has a fallback chain to escalate to, but end-to-end
+    //   escalation isn't reliably happening under Playwright yet —
+    //   audio advances, `totalVideoFrames` behavior under a broken
+    //   decoder needs verification, and the switch execution path
+    //   hasn't been traced. Skipped while that's investigated.
     //
     // - **Shipping Chrome** (not Playwright): same as WebKit.
     skipPlayback: {
-      firefox: "Firefox MSE accepts HEVC but can't decode it; needs decode-stall detection (follow-up)",
+      firefox: "Firefox HEVC remux path still fails to escalate end-to-end under Playwright; v2.8.4 watchdog is in place but detection or switch execution isn't landing — tracked follow-up.",
     },
   },
   {

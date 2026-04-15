@@ -16,9 +16,16 @@ import { defineConfig, devices } from "@playwright/test";
 export default defineConfig({
   testDir: "tests/browser",
   testMatch: "**/*.spec.ts",
-  fullyParallel: true,
+  // Tests within a single browser project run serially — concurrent
+  // playback tests on Chromium were racing on <video> element resources
+  // when multiple workers loaded libav/wasm at once, producing
+  // `timeAdvanced=0 playError=none` flakes. Cross-project parallelism
+  // (chromium / firefox / webkit) still happens because each project
+  // gets its own worker.
+  fullyParallel: false,
+  workers: 3,
   forbidOnly: !!process.env.CI,
-  retries: process.env.CI ? 1 : 0,
+  retries: process.env.CI ? 2 : 1,
   reporter: process.env.CI ? "github" : "list",
 
   // Auto-start the Vite dev server. Developers with `npm run demo` already
