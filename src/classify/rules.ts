@@ -31,6 +31,7 @@ export const FALLBACK_VIDEO_CODECS = new Set<VideoCodec>([
   "wmv3", "vc1", "mpeg4",
   "rv10", "rv20", "rv30", "rv40",
   "mpeg2", "mpeg1", "theora",
+  "dv", "hq_hqa",
 ]);
 export const FALLBACK_AUDIO_CODECS = new Set<AudioCodec>([
   "wmav2", "wmapro", "ac3", "eac3",

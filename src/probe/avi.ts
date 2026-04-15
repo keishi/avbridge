@@ -181,6 +181,8 @@ function ffmpegToAvbridgeVideo(name: string): VideoCodec {
     case "rv20":   return "rv20";
     case "rv30":   return "rv30";
     case "rv40":   return "rv40";
+    case "dvvideo": return "dv";       // DV / DVCPRO (camcorder, MiniDV)
+    case "hq_hqa": return "hq_hqa";    // Canopus HQ / HQA (Grass Valley)
     default:       return name as VideoCodec;
   }
 }

@@ -49,6 +49,8 @@ export type VideoCodec =
   | "mpeg2"
   | "mpeg1"
   | "theora"
+  | "dv" // DV / DVCPRO (camcorder, MiniDV)
+  | "hq_hqa" // Canopus HQ / HQA (Grass Valley intermediate)
   | (string & {});
 
 /** Audio codec families. */
