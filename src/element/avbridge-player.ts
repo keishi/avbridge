@@ -560,148 +560,122 @@ export class AvbridgePlayerElement extends HTMLElement {
   }
 
   private _buildSettingsMenu(): void {
-    const CHEVRON = `<svg class="avp-settings-chevron" viewBox="0 0 24 24" fill="currentColor"><path d="M7.41 8.59L12 13.17l4.59-4.58L18 10l-6 6-6-6z"/></svg>`;
     const sections: string[] = [];
 
-    const section = (id: string, label: string, value: string, body: string): string =>
-      `<div class="avp-settings-section" data-section="${id}">` +
-        `<div class="avp-settings-header" data-section-toggle="${id}">` +
+    // Helper: a row with an invisible native <select> layered on top of
+    // a styled label+value. Tapping opens the OS picker (escapes the
+    // shadow DOM — intentional for small players). The visible label
+    // updates on change.
+    const selectRow = (label: string, options: string, selectAttrs: string): string =>
+      `<div class="avp-settings-section">` +
+        `<div class="avp-settings-header">` +
           `<span class="avp-settings-header-label">${label}</span>` +
-          `<span class="avp-settings-header-value">${value}${CHEVRON}</span>` +
+          `<select class="avp-settings-select" ${selectAttrs}>${options}</select>` +
         `</div>` +
-        `<div class="avp-settings-body">${body}</div>` +
       `</div>`;
 
     // Speed
     const currentRate = this._video.playbackRate ?? 1;
-    const speedLabel = Math.abs(currentRate - 1) < 0.01 ? "Normal" : `${currentRate}x`;
-    let speedItems = "";
+    let speedOpts = "";
     for (const spd of PLAYBACK_SPEEDS) {
-      const active = Math.abs(spd - currentRate) < 0.01;
+      const sel = Math.abs(spd - currentRate) < 0.01 ? " selected" : "";
       const label = spd === 1 ? "Normal" : `${spd}x`;
-      speedItems += `<div class="avp-settings-item${active ? " active" : ""}" data-speed="${spd}">${label}</div>`;
+      speedOpts += `<option value="${spd}"${sel}>${label}</option>`;
     }
-    sections.push(section("speed", "Speed", speedLabel, speedItems));
+    sections.push(selectRow("Speed", speedOpts, `data-action="speed"`));
 
     // Audio tracks
     const audios = this._video.audioTracks ?? [];
     if (audios.length > 1) {
-      let audioItems = "";
+      let audioOpts = "";
       for (const t of audios) {
-        audioItems += `<div class="avp-settings-item" data-audio="${t.id}">${t.language ?? `Track ${t.id}`}</div>`;
+        audioOpts += `<option value="${t.id}">${t.language ?? `Track ${t.id}`}</option>`;
       }
-      sections.push(section("audio", "Audio", audios[0]?.language ?? "Track 1", audioItems));
+      sections.push(selectRow("Audio", audioOpts, `data-action="audio"`));
     }
 
     // Subtitle tracks
     const subs = this._video.subtitleTracks ?? [];
     if (subs.length > 0) {
-      let subItems = `<div class="avp-settings-item active" data-subtitle="-1">Off</div>`;
+      let subOpts = `<option value="-1" selected>Off</option>`;
       for (const t of subs) {
-        subItems += `<div class="avp-settings-item" data-subtitle="${t.id}">${t.language ?? `Track ${t.id}`}</div>`;
+        subOpts += `<option value="${t.id}">${t.language ?? `Track ${t.id}`}</option>`;
       }
-      sections.push(section("subtitles", "Subtitles", "Off", subItems));
+      sections.push(selectRow("Subtitles", subOpts, `data-action="subtitle"`));
     }
 
     // Fit mode — opt-in via the `show-fit` attribute
     if (this.hasAttribute("show-fit")) {
       const currentFit = (this._video.fit ?? "contain") as FitMode;
-      const fitLabel = currentFit[0].toUpperCase() + currentFit.slice(1);
-      let fitItems = "";
+      let fitOpts = "";
       for (const mode of FIT_MODES) {
-        const active = mode === currentFit;
+        const sel = mode === currentFit ? " selected" : "";
         const label = mode[0].toUpperCase() + mode.slice(1);
-        fitItems += `<div class="avp-settings-item${active ? " active" : ""}" data-fit="${mode}">${label}</div>`;
+        fitOpts += `<option value="${mode}"${sel}>${label}</option>`;
       }
-      sections.push(section("fit", "Fit", fitLabel, fitItems));
+      sections.push(selectRow("Fit", fitOpts, `data-action="fit"`));
     }
 
     // Consumer-added sections
     for (const cfg of this._customSections) {
-      const activeItem = cfg.items.find((i) => i.active);
-      let items = "";
+      let customOpts = "";
       for (const item of cfg.items) {
-        items += `<div class="avp-settings-item${item.active ? " active" : ""}" data-custom-section="${cfg.id}" data-custom-item="${item.id}">${item.label}</div>`;
+        const sel = item.active ? " selected" : "";
+        customOpts += `<option value="${item.id}"${sel}>${item.label}</option>`;
       }
-      sections.push(section(`custom-${cfg.id}`, cfg.label, activeItem?.label ?? "", items));
+      sections.push(selectRow(cfg.label, customOpts, `data-action="custom" data-custom-id="${cfg.id}"`));
     }
 
-    // Stats for nerds — toggle row, not an accordion section
+    // Stats for nerds — toggle row (no select)
     sections.push(
       `<div class="avp-settings-section">` +
-        `<div class="avp-settings-header" data-stats>` +
+        `<div class="avp-settings-header avp-settings-toggle" data-stats>` +
           `<span class="avp-settings-header-label">Stats for Nerds</span>` +
-          `<span class="avp-settings-header-value"></span>` +
         `</div>` +
       `</div>`,
     );
 
-    // Preserve the handle, replace everything after it.
+    // Rebuild sheet content (preserve the handle).
     const handle = this._settingsMenu.querySelector(".avp-settings-handle");
     this._settingsMenu.innerHTML = "";
     if (handle) this._settingsMenu.appendChild(handle);
     else this._settingsMenu.insertAdjacentHTML("afterbegin", `<div class="avp-settings-handle"></div>`);
     this._settingsMenu.insertAdjacentHTML("beforeend", sections.join(""));
 
-    // ── Accordion toggle ──
-    for (const header of this._settingsMenu.querySelectorAll("[data-section-toggle]")) {
-      header.addEventListener("click", (e) => {
+    // ── <select> change handlers ──
+    for (const sel of this._settingsMenu.querySelectorAll<HTMLSelectElement>(".avp-settings-select")) {
+      sel.addEventListener("change", (e) => {
         e.stopPropagation();
-        const id = (header as HTMLElement).dataset.sectionToggle!;
-        const sec = this._settingsMenu.querySelector(`[data-section="${id}"]`);
-        if (!sec) return;
-        const wasOpen = sec.hasAttribute("data-expanded");
-        // Collapse all sections first (only one open at a time).
-        for (const s of this._settingsMenu.querySelectorAll("[data-expanded]")) {
-          s.removeAttribute("data-expanded");
+        const action = sel.dataset.action;
+        const val = sel.value;
+        switch (action) {
+          case "speed":
+            this._video.playbackRate = Number(val);
+            break;
+          case "audio":
+            void this._video.setAudioTrack(Number(val));
+            break;
+          case "subtitle":
+            void this._video.setSubtitleTrack(Number(val) >= 0 ? Number(val) : null);
+            break;
+          case "fit":
+            this.setAttribute("fit", val);
+            break;
+          case "custom": {
+            const cfgId = sel.dataset.customId!;
+            const cfg = this._customSections.find((s) => s.id === cfgId);
+            cfg?.onSelect(val);
+            break;
+          }
         }
-        if (!wasOpen) sec.setAttribute("data-expanded", "");
+        this._buildSettingsMenu();
       });
     }
 
-    // ── Item handlers ──
-    for (const item of this._settingsMenu.querySelectorAll("[data-speed]")) {
-      item.addEventListener("click", (e) => {
-        e.stopPropagation();
-        this._video.playbackRate = Number((item as HTMLElement).dataset.speed);
-        this._buildSettingsMenu();
-      });
-    }
-    for (const item of this._settingsMenu.querySelectorAll("[data-audio]")) {
-      item.addEventListener("click", (e) => {
-        e.stopPropagation();
-        void this._video.setAudioTrack(Number((item as HTMLElement).dataset.audio));
-        this._buildSettingsMenu();
-      });
-    }
-    for (const item of this._settingsMenu.querySelectorAll("[data-subtitle]")) {
-      item.addEventListener("click", (e) => {
-        e.stopPropagation();
-        const id = Number((item as HTMLElement).dataset.subtitle);
-        void this._video.setSubtitleTrack(id >= 0 ? id : null);
-        this._buildSettingsMenu();
-      });
-    }
-    for (const item of this._settingsMenu.querySelectorAll("[data-fit]")) {
-      item.addEventListener("click", (e) => {
-        e.stopPropagation();
-        this.setAttribute("fit", (item as HTMLElement).dataset.fit!);
-        this._buildSettingsMenu();
-      });
-    }
-    for (const item of this._settingsMenu.querySelectorAll("[data-custom-item]")) {
-      item.addEventListener("click", (e) => {
-        e.stopPropagation();
-        const sectionId = (item as HTMLElement).dataset.customSection!;
-        const itemId = (item as HTMLElement).dataset.customItem!;
-        const cfg = this._customSections.find((s) => s.id === sectionId);
-        cfg?.onSelect(itemId);
-        this._buildSettingsMenu();
-      });
-    }
-    const statsHeader = this._settingsMenu.querySelector("[data-stats]");
-    if (statsHeader) {
-      statsHeader.addEventListener("click", (e) => {
+    // Stats toggle (no select — just a clickable row)
+    const statsRow = this._settingsMenu.querySelector("[data-stats]");
+    if (statsRow) {
+      statsRow.addEventListener("click", (e) => {
         e.stopPropagation();
         this._toggleStats();
         this._closeSettings();

@@ -563,58 +563,25 @@ export const PLAYER_STYLES = /* css */ `
   font-weight: 500;
 }
 
-.avp-settings-header-value {
-  opacity: 0.6;
-  font-size: 13px;
-}
-
-/* Chevron rotates when section is expanded. */
-.avp-settings-chevron {
-  width: 16px;
-  height: 16px;
-  opacity: 0.5;
-  transition: transform 0.15s;
-  flex-shrink: 0;
-  margin-left: 8px;
-}
-
-.avp-settings-section[data-expanded] .avp-settings-chevron {
-  transform: rotate(180deg);
-}
-
-/* Expanded section body — hidden by default, shown via data-expanded. */
-.avp-settings-body {
-  display: none;
-  padding: 0 8px 8px;
-}
-
-.avp-settings-section[data-expanded] .avp-settings-body {
-  display: block;
-}
-
-/* Items inside expanded body. */
-.avp-settings-item {
-  display: flex;
-  align-items: center;
-  padding: 10px 12px;
-  font-size: 13px;
+/* Invisible native <select> layered over the header row. Tapping opens
+   the OS picker (which renders OUTSIDE the shadow DOM / player bounds —
+   intentional for small players). The select is full-width/height of
+   the header so the entire row is tappable. */
+.avp-settings-select {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
   cursor: pointer;
-  border-radius: 6px;
-  transition: background 0.1s;
+  font-size: 16px;
 }
 
-.avp-settings-item:hover { background: rgba(255, 255, 255, 0.08); }
-
-.avp-settings-item.active {
-  color: #3ea6ff;
-  background: rgba(62, 166, 255, 0.1);
+/* Toggle-style rows (Stats for Nerds) — no select, just clickable. */
+.avp-settings-toggle {
+  cursor: pointer;
 }
-
-.avp-settings-item.active::before {
-  content: "\\2713";
-  margin-right: 8px;
-  font-weight: bold;
-}
+.avp-settings-toggle:hover { background: rgba(255, 255, 255, 0.06); }
 
 /* ── Stats for nerds ──────────────────────────────────────────────────── */
 
