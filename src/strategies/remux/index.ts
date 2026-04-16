@@ -65,6 +65,14 @@ export async function createRemuxSession(
       }
       const wasPlaying = !video.paused;
       await pipeline.seek(time, wasPlaying || wantPlay);
+      // HTMLMediaElement contract: Firefox + WebKit's MSE doesn't
+      // reliably fire `seeked` after a SourceBuffer remove+refill
+      // cycle (Chromium does). Dispatch manually so consumers get a
+      // consistent signal across browsers. Duplicating a native
+      // `seeked` is harmless per spec.
+      queueMicrotask(() => {
+        try { video.dispatchEvent(new Event("seeked")); } catch { /* ignore */ }
+      });
     },
     async setAudioTrack(id) {
       if (!context.audioTracks.some((t) => t.id === id)) {

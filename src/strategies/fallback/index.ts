@@ -252,6 +252,11 @@ export async function createFallbackSession(
 
   async function doSeek(timeSec: number): Promise<void> {
     const wasPlaying = audio.isPlaying();
+    // HTMLMediaElement contract: dispatch `seeking` once the seek
+    // operation begins. The inner <video> never fires this itself on
+    // canvas strategies (no src), so we dispatch manually to preserve
+    // the contract for consumers listening via `<avbridge-video>`.
+    target.dispatchEvent(new Event("seeking"));
     // 1. Stop audio (suspend ctx + capture media time).
     await audio.pause().catch(() => {});
     // 2. Tell the decoder to cancel its pump and seek the demuxer.
@@ -268,7 +273,20 @@ export async function createFallbackSession(
       await waitForBuffer();
       await audio.start();
     }
+    // HTMLMediaElement contract: dispatch `seeked` after the seek has
+    // completed (demuxer + renderer reset + optional buffer refill).
+    target.dispatchEvent(new Event("seeked"));
   }
+
+  // HTMLMediaElement contract: dispatch `loadedmetadata` once the
+  // session is ready (duration, dimensions, tracks known via the
+  // MediaContext). Dispatched on a microtask so it lands after the
+  // session promise resolves and consumers have a chance to attach
+  // listeners. The inner <video> never fires this itself here — it
+  // has no src.
+  queueMicrotask(() => {
+    try { target.dispatchEvent(new Event("loadedmetadata")); } catch { /* element torn down */ }
+  });
 
   return {
     strategy: "fallback",

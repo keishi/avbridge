@@ -1,6 +1,6 @@
 # avbridge.js — Roadmap
 
-Current released version: **v2.8.6** (2026-04-15)
+Current released version: **v2.8.7** (2026-04-16)
 
 ## Positioning
 
@@ -288,6 +288,23 @@ hybrid/fallback" gap.
 - **`packetPtsSec` helper** extracted for unit-testable pts
   conversion, plus `bufferedUntilSec()` on both decoder handles.
 
+### v2.8.7 — `contract.spec.ts` + HTMLMediaElement parity fixes
+
+Released 2026-04-16. Third slice of the Tier 4 matrix. Writing it
+surfaced four real contract bugs:
+
+- **`volumechange` didn't fire on any strategy** — setter toggled the
+  attribute instead of the IDL property. Fixed.
+- **`seeking`/`seeked` didn't fire on hybrid/fallback** — the custom
+  pump bypassed the native video's native seek events. Fixed.
+- **`seeked` unreliable on remux in Firefox + WebKit** — MSE doesn't
+  always fire it after `SourceBuffer.remove()`. Remux session now
+  dispatches manually.
+- **`loadedmetadata` didn't fire on hybrid/fallback** — inner `<video>`
+  has no `src`. Fixed.
+
+Tier 4 matrix is now **42/0 green** across Chromium, Firefox, WebKit.
+
 ### v2.8.6 — Cross-browser matrix fully green
 
 Released 2026-04-15. Un-skips the last deferred item.
@@ -339,12 +356,9 @@ children, `readyState` + `seekable` for canvas strategies. Still TODO:
 Tier 4 Playwright infrastructure shipped in v2.7.0 with the
 strategy-decision slice; `playback.spec.ts` landed in v2.8.1; the
 silent-video watchdog landed in v2.8.4; Firefox HEVC unskipped in
-v2.8.6 (matrix 30/0 green). Still pending:
-
-- **`contract.spec.ts`**: HTMLMediaElement event + property parity
-  across strategies and browsers. Would catch regressions like a
-  strategy forgetting to forward `timeupdate` or misreporting
-  `readyState`.
+v2.8.6 (matrix 30/0 green); `contract.spec.ts` landed in v2.8.7
+with four HTMLMediaElement parity fixes (matrix now 42/0 green).
+All three originally-planned slices are shipped.
 
 Goal across the whole tier is the same: **avbridge chooses the correct
 strategy and degrades correctly on each browser** — not "every browser

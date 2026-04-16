@@ -1,6 +1,6 @@
 {
   "name": "avbridge",
-  "version": "2.8.6",
+  "version": "2.8.7",
   "description": "Play and convert arbitrary video files in the browser. Native, remux, hybrid, fallback, and transcode — one API.",
   "license": "MIT",
   "author": "Keishi Hattori",

@@ -598,10 +598,21 @@ export class AvbridgeVideoElement extends HTMLElementCtor {
   }
 
   get muted(): boolean {
-    return this.hasAttribute("muted");
+    // Read through to the inner <video>'s IDL property — on canvas
+    // strategies the property is patched via Object.defineProperty to
+    // mirror AudioOutput state, and consumers need the truthful value.
+    return this._videoEl.muted;
   }
 
   set muted(value: boolean) {
+    // Drive the IDL property (fires volumechange per HTML spec) rather
+    // than toggling the attribute (which on most browsers is parse-time
+    // only and does NOT fire volumechange when toggled runtime). On
+    // canvas strategies, the property is patched via Object.defineProperty
+    // which also dispatches volumechange; one code path, both worlds.
+    this._videoEl.muted = value;
+    // Keep the attribute in sync so CSS selectors like [muted] and
+    // re-queries via getAttribute reflect current state.
     if (value) this.setAttribute("muted", "");
     else this.removeAttribute("muted");
   }

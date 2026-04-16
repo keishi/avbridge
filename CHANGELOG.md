@@ -4,6 +4,49 @@ All notable changes to **avbridge.js** are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.8.7]
+
+`contract.spec.ts` — the third and final slice of the Tier 4
+cross-browser test matrix — landed, and surfaced three real
+HTMLMediaElement contract bugs in the process. Fixing them. Matrix
+is now 42/0 green across Chromium, Firefox, and WebKit.
+
+### Fixed
+
+- **`volumechange` not firing on any strategy.** `<avbridge-video>.set
+  muted(value)` toggled the `muted` HTML *attribute*, but attribute
+  changes on `<video>` do NOT fire `volumechange` at runtime — only
+  IDL property changes do (per HTML spec). Now the setter writes
+  `_videoEl.muted = value` directly, which fires `volumechange`
+  naturally on native/remux and goes through the Object.defineProperty
+  shim on hybrid/fallback (which dispatches manually). Attribute is
+  kept in sync for CSS selectors.
+- **`seeking` + `seeked` not firing on hybrid/fallback.** These
+  strategies hide the inner `<video>` and seek via a custom
+  pump/decoder; the native element never saw a `currentTime` change,
+  so no native seek events. Now dispatched manually at the start and
+  end of `doSeek()` in both sessions.
+- **`seeked` unreliable on remux in Firefox + WebKit.** Chromium's
+  MSE fires `seeked` after a `SourceBuffer.remove()` + refill cycle;
+  Firefox and WebKit don't, leaving consumers waiting forever.
+  Remux session now dispatches `seeked` via `queueMicrotask` after
+  `pipeline.seek()` completes. Harmless duplicate on Chromium per
+  spec; consistent cross-browser signal where it mattered.
+- **`loadedmetadata` not firing on hybrid/fallback.** Again, the
+  inner `<video>` has no `src`, so the native event never fires. Now
+  dispatched once the session is constructed (duration, dimensions,
+  tracks all known via the MediaContext).
+
+### Added
+
+- **`tests/browser/contract.spec.ts`** — HTMLMediaElement event +
+  property parity per fixture per browser. 12 tests covering all four
+  strategies via `mp4 h264/aac` (native), `mkv h264/aac` (remux),
+  `avi h264/mp3` (hybrid), `avi mpeg4/mp3` (fallback). Drives each
+  player through play → pause → volumechange → seek and asserts
+  events fire and properties (`duration`, `currentTime`,
+  `readyState`, `seekable`, `buffered`) are truthful.
+
 ## [2.8.6]
 
 Un-skips the last deferred Firefox HEVC entry from the cross-browser

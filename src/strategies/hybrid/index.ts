@@ -121,6 +121,8 @@ export async function createHybridSession(
 
   async function doSeek(timeSec: number): Promise<void> {
     const wasPlaying = audio.isPlaying();
+    // HTMLMediaElement contract — see fallback/index.ts for the why.
+    target.dispatchEvent(new Event("seeking"));
     await audio.pause().catch(() => {});
     await handles.seek(timeSec).catch((err) =>
       console.warn("[avbridge] hybrid decoder seek failed:", err),
@@ -131,7 +133,15 @@ export async function createHybridSession(
       await waitForBuffer();
       await audio.start();
     }
+    target.dispatchEvent(new Event("seeked"));
   }
+
+  // HTMLMediaElement contract: `loadedmetadata` once the session is
+  // ready. The inner <video> never fires this itself on the hybrid
+  // path — it has no src.
+  queueMicrotask(() => {
+    try { target.dispatchEvent(new Event("loadedmetadata")); } catch { /* element torn down */ }
+  });
 
   // Store the fatal error handler so the player can wire escalation
   let fatalErrorHandler: ((reason: string) => void) | null = null;
