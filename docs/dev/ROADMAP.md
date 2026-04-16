@@ -1,6 +1,6 @@
 # avbridge.js — Roadmap
 
-Current released version: **v2.8.7** (2026-04-16)
+Current released version: **v2.9.0** (2026-04-16)
 
 ## Positioning
 

@@ -4,6 +4,40 @@ All notable changes to **avbridge.js** are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.9.0]
+
+Player chrome ergonomics — four changes driven by explorer integration
+and mobile testing.
+
+### Added
+
+- **`<slot name="content-overlay">`** on `<avbridge-player>`. Full-area
+  overlay for rich consumer content (tweet cards, media info,
+  annotations) that auto-hides with the chrome. Sits above the video,
+  below controls in z-order. Wrapper is `pointer-events: none`; slotted
+  content gets `pointer-events: auto` via `::slotted(*)`. Stylable via
+  `::part(content-overlay)`. Gesture gating updated so clicks on
+  slotted content don't toggle play/pause.
+- **Mobile seek bar improvements.** Touch target expanded from 20px →
+  44px (matching YouTube Mobile) while the visual track stays 4px.
+  Tooltip now follows the finger during drag (was desktop-hover-only).
+  Thumb enlarges during active scrub (1.5x on mobile, 1.4x on desktop)
+  for visual feedback. All driven by a `data-seeking` attribute on
+  `.avp-seek` set during the pointer-capture drag cycle.
+
+### Fixed
+
+- **Top-left toolbar slot didn't grow.** Wrapper lacked `flex: 1`,
+  so slotted text/content couldn't fill remaining width. Any consumer
+  putting a title or description in `top-left` hit this.
+- **Blue tap-highlight flash on `<avbridge-player>`.** Suppressed
+  `-webkit-tap-highlight-color` on `:host` and `.avp`. Added
+  `user-select: none` on `.avp` to prevent accidental text selection
+  during tap-and-hold gestures.
+- **Settings menu clipped on short player elements.** `max-height` was
+  a fixed 300px; now `min(300px, calc(100% - 60px))` so it shrinks to
+  fit within the player and scrolls when needed.
+
 ## [2.8.7]
 
 `contract.spec.ts` — the third and final slice of the Tier 4
