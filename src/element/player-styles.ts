@@ -25,11 +25,18 @@ export const PLAYER_STYLES = /* css */ `
 
 /* ── Container ────────────────────────────────────────────────────────── */
 
+:host {
+  -webkit-tap-highlight-color: transparent;
+  outline: none;
+}
+
 .avp {
   position: relative;
   width: 100%;
   height: 100%;
   cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  user-select: none;
 }
 
 .avp avbridge-video {
