@@ -535,7 +535,24 @@ export class AvbridgePlayerElement extends HTMLElement {
   private _toggleSettings(): void {
     this._settingsOpen = !this._settingsOpen;
     this._settingsMenu.classList.toggle("open", this._settingsOpen);
-    if (this._settingsOpen) this._showControls();
+    if (this._settingsOpen) {
+      this._fitSettingsToPlayer();
+      this._showControls();
+    }
+  }
+
+  private _fitSettingsToPlayer(): void {
+    const container = this.shadowRoot?.querySelector(".avp") as HTMLElement | null;
+    if (!container) return;
+    const rect = container.getBoundingClientRect();
+    const menu = this._settingsMenu;
+    // Available height: player height minus controls bar (52px) minus
+    // top/bottom margin (8px each).
+    const maxH = Math.max(120, rect.height - 52 - 16);
+    // Available width: player width minus left/right margin (12px each).
+    const maxW = Math.max(160, rect.width - 24);
+    menu.style.maxHeight = `${Math.min(300, maxH)}px`;
+    menu.style.maxWidth = `${Math.min(320, maxW)}px`;
   }
 
   private _closeSettings(): void {

@@ -492,8 +492,12 @@ export const PLAYER_STYLES = /* css */ `
   right: 12px;
   background: rgba(28, 28, 28, 0.95);
   border-radius: 8px;
-  min-width: 220px;
+  min-width: 180px;
+  /* max-height and max-width are set by JS (_fitSettingsToPlayer)
+     on each open to match the player's actual dimensions. Fallback
+     values here for the brief frame before JS runs. */
   max-height: 300px;
+  max-width: 320px;
   overflow-y: auto;
   display: none;
   z-index: 10;
