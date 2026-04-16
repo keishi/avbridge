@@ -442,21 +442,25 @@ export class AvbridgePlayerElement extends HTMLElement {
     this._userSeeking = true;
     const seekBar = this.shadowRoot!.querySelector(".avp-seek") as HTMLElement;
     seekBar.setPointerCapture(e.pointerId);
+    seekBar.setAttribute("data-seeking", "");
 
     const initial = this._timeFromSeekPointer(e.clientX);
     this._seekInput.value = String(initial);
     this._onSeekInput();
+    this._updateSeekTooltip(e.clientX);
 
     const onMove = (ev: PointerEvent) => {
       const t = this._timeFromSeekPointer(ev.clientX);
       this._seekInput.value = String(t);
       this._onSeekInput();
+      this._updateSeekTooltip(ev.clientX);
     };
     const onUp = (ev: PointerEvent) => {
       const t = this._timeFromSeekPointer(ev.clientX);
       this._seekInput.value = String(t);
       this._onSeekCommit();
-      this._seekInput.focus(); // keep keyboard nav responsive
+      this._seekInput.focus();
+      seekBar.removeAttribute("data-seeking");
       seekBar.removeEventListener("pointermove", onMove);
       seekBar.removeEventListener("pointerup", onUp);
       seekBar.removeEventListener("pointercancel", onUp);
@@ -468,8 +472,12 @@ export class AvbridgePlayerElement extends HTMLElement {
   }
 
   private _onSeekHover(e: PointerEvent): void {
+    this._updateSeekTooltip(e.clientX);
+  }
+
+  private _updateSeekTooltip(clientX: number): void {
     const rect = this._seekInput.getBoundingClientRect();
-    const frac = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+    const frac = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
     const t = frac * (this._video.duration || 0);
     this._seekTooltip.textContent = formatTime(t);
     this._seekTooltip.style.left = `${frac * 100}%`;

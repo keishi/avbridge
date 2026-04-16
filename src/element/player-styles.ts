@@ -365,6 +365,15 @@ export const PLAYER_STYLES = /* css */ `
 
 .avp-seek:hover .avp-seek-tooltip { display: block; }
 
+/* Show tooltip during active drag (touch or mouse). The JS side sets
+   data-seeking on .avp-seek while the user is scrubbing. */
+.avp-seek[data-seeking] .avp-seek-tooltip { display: block; }
+
+/* Enlarge thumb while scrubbing. */
+.avp-seek[data-seeking] .avp-seek-thumb {
+  transform: translate(-50%, -50%) scale(1.4);
+}
+
 /* ── Bottom row ───────────────────────────────────────────────────────── */
 
 .avp-bottom {
@@ -559,9 +568,24 @@ export const PLAYER_STYLES = /* css */ `
 @media (pointer: coarse) {
   .avp-btn svg { width: 28px; height: 28px; }
   .avp-btn { padding: 8px; }
+
+  /* Taller touch target on mobile (44px, matching YouTube Mobile)
+     while keeping the visual track thin. Negative margin collapses
+     the extra space so the controls layout doesn't shift. */
+  .avp-seek { height: 44px; margin-top: -12px; margin-bottom: -12px; }
   .avp-seek-track { height: 4px; }
   .avp-seek:hover .avp-seek-track { height: 4px; }
-  .avp-seek-thumb { transform: translate(-50%, -50%) scale(1); }
+  .avp-seek-thumb {
+    transform: translate(-50%, -50%) scale(1);
+    width: 16px;
+    height: 16px;
+  }
+  .avp-seek[data-seeking] .avp-seek-thumb {
+    transform: translate(-50%, -50%) scale(1.5);
+  }
+  /* Move tooltip above the taller touch zone. */
+  .avp-seek-tooltip { bottom: 32px; }
+
   .avp-volume:hover .avp-volume-slider { width: 0; }
   .avp-overlay-btn { width: 56px; height: 56px; }
   .avp-overlay-btn svg { width: 30px; height: 30px; }
