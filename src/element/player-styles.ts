@@ -228,7 +228,14 @@ export const PLAYER_STYLES = /* css */ `
   pointer-events: auto;
 }
 
-.avp-toolbar-top-right { margin-left: auto; }
+/* Left slot fills remaining space so slotted text/content can grow.
+   min-width: 0 prevents flex children from overflowing the toolbar. */
+.avp-toolbar-top-left {
+  flex: 1;
+  min-width: 0;
+}
+
+.avp-toolbar-top-right { margin-left: auto; flex-shrink: 0; }
 
 /* Hide the gradient band when no consumer has slotted anything — we
    toggle data-toolbar-empty from JS via slotchange. */
@@ -239,6 +246,30 @@ export const PLAYER_STYLES = /* css */ `
 :host([data-controls-hidden]) .avp-toolbar-top {
   opacity: 0;
   pointer-events: none;
+}
+
+/* ── Content overlay ─────────────────────────────────────────────────── */
+/* Consumer-provided rich content (tweet cards, media info, annotations).
+   Sits above the video, below the play-button overlay and controls in
+   z-order. Auto-hides with the chrome. The wrapper is pointer-events:none
+   so taps fall through to the video; consumers opt in on their content
+   with pointer-events:auto. */
+
+.avp-content-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  opacity: 1;
+  transition: opacity 0.25s;
+}
+
+.avp-content-overlay ::slotted(*) {
+  pointer-events: auto;
+}
+
+:host([data-controls-hidden]) .avp-content-overlay {
+  opacity: 0;
 }
 
 /* ── Seek bar ─────────────────────────────────────────────────────────── */

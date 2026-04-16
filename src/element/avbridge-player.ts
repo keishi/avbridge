@@ -167,6 +167,7 @@ export class AvbridgePlayerElement extends HTMLElement {
     <div part="toolbar-top-left" class="avp-toolbar-top-left"><slot name="top-left"></slot></div>
     <div part="toolbar-top-right" class="avp-toolbar-top-right"><slot name="top-right"></slot></div>
   </div>
+  <div part="content-overlay" class="avp-content-overlay"><slot name="content-overlay"></slot></div>
   <div part="overlay" class="avp-overlay">
     <button class="avp-overlay-btn" aria-label="Play">${ICON_PLAY}</button>
     <div class="avp-spinner"></div>
@@ -727,13 +728,15 @@ export class AvbridgePlayerElement extends HTMLElement {
   /** Track whether the last interaction was touch so click handler can skip. */
   private _lastPointerTypeWasTouch = false;
 
-  /** True if the event's composed path passes through consumer-slotted toolbar
-   *  content. Slotted content lives in the light DOM so `.closest(".avp-toolbar-top")`
-   *  on the event target won't find the shadow-DOM wrapper — `composedPath()`
-   *  does. */
-  private _isToolbarEvent(e: Event): boolean {
+  /** True if the event's composed path passes through consumer-slotted
+   *  content (toolbar or content-overlay). Slotted content lives in the
+   *  light DOM so `.closest(".avp-toolbar-top")` on the event target won't
+   *  find the shadow-DOM wrapper — `composedPath()` does. */
+  private _isSlottedContentEvent(e: Event): boolean {
     for (const node of e.composedPath()) {
-      if (node instanceof HTMLElement && node.classList.contains("avp-toolbar-top")) return true;
+      if (node instanceof HTMLElement &&
+        (node.classList.contains("avp-toolbar-top") ||
+         node.classList.contains("avp-content-overlay"))) return true;
     }
     return false;
   }
@@ -741,7 +744,7 @@ export class AvbridgePlayerElement extends HTMLElement {
   private _onContainerClick(e: MouseEvent): void {
     // Ignore clicks on controls
     if ((e.target as HTMLElement).closest?.(".avp-controls, .avp-settings, .avp-overlay-btn")) return;
-    if (this._isToolbarEvent(e)) return;
+    if (this._isSlottedContentEvent(e)) return;
 
     // Touch taps are handled by _onPointerUp (show/hide controls + double-tap).
     // The browser fires a synthetic click after touchend — skip it.
@@ -760,7 +763,7 @@ export class AvbridgePlayerElement extends HTMLElement {
 
   private _onContainerDblClick(e: MouseEvent): void {
     if ((e.target as HTMLElement).closest?.(".avp-controls, .avp-settings")) return;
-    if (this._isToolbarEvent(e)) return;
+    if (this._isSlottedContentEvent(e)) return;
     // Cancel the pending single-click play/pause
     if (this._tapTimer) { clearTimeout(this._tapTimer); this._tapTimer = null; }
     this._toggleFullscreen();
@@ -786,7 +789,7 @@ export class AvbridgePlayerElement extends HTMLElement {
 
     // Ignore touches on controls — buttons have their own handlers
     if ((e.target as HTMLElement).closest?.(".avp-controls, .avp-settings, .avp-overlay-btn")) return;
-    if (this._isToolbarEvent(e)) return;
+    if (this._isSlottedContentEvent(e)) return;
 
     // Double-tap detection
     const now = Date.now();
