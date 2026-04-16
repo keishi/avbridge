@@ -23,7 +23,7 @@ import {
   ICON_FULLSCREEN, ICON_FULLSCREEN_EXIT,
   ICON_REPLAY_10, ICON_FORWARD_10,
 } from "./player-icons.js";
-import type { AvbridgeVideoElementEventMap } from "../types.js";
+import type { AvbridgeVideoElementEventMap, SettingsSectionConfig } from "../types.js";
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 
@@ -87,6 +87,8 @@ export class AvbridgePlayerElement extends HTMLElement {
   private _volumeInput!: HTMLInputElement;
   private _settingsBtn!: HTMLButtonElement;
   private _settingsMenu!: HTMLDivElement;
+  private _settingsScrim!: HTMLDivElement;
+  private _customSections: import("../types.js").SettingsSectionConfig[] = [];
   private _fullscreenBtn!: HTMLButtonElement;
   // Strategy badge removed — visible in Stats for Nerds instead.
   // Spinner is rendered but driven entirely by CSS :host([data-state]) selectors.
@@ -133,6 +135,7 @@ export class AvbridgePlayerElement extends HTMLElement {
     this._volumeInput = shadow.querySelector(".avp-volume-input") as HTMLInputElement;
     this._settingsBtn = shadow.querySelector(".avp-settings-btn") as HTMLButtonElement;
     this._settingsMenu = shadow.querySelector(".avp-settings") as HTMLDivElement;
+    this._settingsScrim = shadow.querySelector(".avp-settings-scrim") as HTMLDivElement;
     this._fullscreenBtn = shadow.querySelector(".avp-fullscreen") as HTMLButtonElement;
     // Badge removed from controls bar — strategy visible in Stats for Nerds.
     // Spinner is rendered in shadow DOM, driven by CSS :host([data-state]).
@@ -199,7 +202,8 @@ export class AvbridgePlayerElement extends HTMLElement {
       <button class="avp-btn avp-settings-btn" part="settings-button" aria-label="Settings">${ICON_SETTINGS}</button>
       <button class="avp-btn avp-fullscreen" part="fullscreen-button" aria-label="Fullscreen">${ICON_FULLSCREEN}</button>
     </div>
-    <div class="avp-settings" part="settings-menu"></div>
+    <div class="avp-settings-scrim"></div>
+    <div class="avp-settings" part="settings-menu"><div class="avp-settings-handle"></div></div>
   </div>
 </div>`;
   }
@@ -285,6 +289,7 @@ export class AvbridgePlayerElement extends HTMLElement {
 
     // Settings
     on(this._settingsBtn, "click", (e) => { e.stopPropagation(); this._toggleSettings(); });
+    on(this._settingsScrim, "click", () => this._closeSettings());
 
     // Fullscreen
     on(this._fullscreenBtn, "click", (e) => { e.stopPropagation(); this._toggleFullscreen(); });
@@ -298,14 +303,9 @@ export class AvbridgePlayerElement extends HTMLElement {
     on(container, "click", (e) => this._onContainerClick(e as MouseEvent));
     on(container, "dblclick", (e) => this._onContainerDblClick(e as MouseEvent));
 
-    // Dismiss settings menu on click outside (inside or outside the player)
-    on(container, "click", (e) => {
-      if (this._settingsOpen &&
-          !(e.target as HTMLElement).closest?.(".avp-settings-btn, .avp-settings")) {
-        this._closeSettings();
-      }
-    });
-    // Also dismiss if user clicks outside the player element entirely
+    // Dismiss settings sheet when clicking outside it. The scrim handles
+    // most of this (its own click handler calls _closeSettings), but we
+    // also catch clicks outside the player element entirely.
     on(document, "click", (e) => {
       if (this._settingsOpen && !this.contains(e.target as Node)) {
         this._closeSettings();
@@ -535,6 +535,7 @@ export class AvbridgePlayerElement extends HTMLElement {
   private _toggleSettings(): void {
     this._settingsOpen = !this._settingsOpen;
     this._settingsMenu.classList.toggle("open", this._settingsOpen);
+    this._settingsScrim.classList.toggle("open", this._settingsOpen);
     if (this._settingsOpen) {
       this._fitSettingsToPlayer();
       this._showControls();
@@ -545,57 +546,42 @@ export class AvbridgePlayerElement extends HTMLElement {
     const container = this.shadowRoot?.querySelector(".avp") as HTMLElement | null;
     if (!container) return;
     const rect = container.getBoundingClientRect();
-    const menu = this._settingsMenu;
-    // Available height: player height minus controls bar (52px) minus
-    // top/bottom margin (8px each).
-    const maxH = Math.max(120, rect.height - 52 - 16);
-    // Available width: player width minus left/right margin (12px each).
-    const maxW = Math.max(160, rect.width - 24);
-    menu.style.maxHeight = `${Math.min(300, maxH)}px`;
-    menu.style.maxWidth = `${Math.min(320, maxW)}px`;
+    // Bottom sheet can use up to 70% of the player height, leaving room
+    // to see the video behind the scrim. Floor at 120px so it's always
+    // usable.
+    const maxH = Math.max(120, Math.floor(rect.height * 0.7));
+    this._settingsMenu.style.maxHeight = `${maxH}px`;
   }
 
   private _closeSettings(): void {
     this._settingsOpen = false;
     this._settingsMenu.classList.remove("open");
+    this._settingsScrim.classList.remove("open");
   }
 
   private _buildSettingsMenu(): void {
+    const CHEVRON = `<svg class="avp-settings-chevron" viewBox="0 0 24 24" fill="currentColor"><path d="M7.41 8.59L12 13.17l4.59-4.58L18 10l-6 6-6-6z"/></svg>`;
     const sections: string[] = [];
 
-    // Fit mode — opt-in via the `show-fit` attribute. Off by default so
-    // chromeless consumers don't get a surprise entry they have to theme
-    // around.
-    if (this.hasAttribute("show-fit")) {
-      const currentFit = (this._video.fit ?? "contain") as FitMode;
-      let fitItems = "";
-      for (const mode of FIT_MODES) {
-        const active = mode === currentFit;
-        const label = mode[0].toUpperCase() + mode.slice(1);
-        fitItems += `<div class="avp-settings-item${active ? " active" : ""}" data-fit="${mode}">${label}</div>`;
-      }
-      sections.push(`<div class="avp-settings-section"><div class="avp-settings-label">Fit</div>${fitItems}</div>`);
-    }
+    const section = (id: string, label: string, value: string, body: string): string =>
+      `<div class="avp-settings-section" data-section="${id}">` +
+        `<div class="avp-settings-header" data-section-toggle="${id}">` +
+          `<span class="avp-settings-header-label">${label}</span>` +
+          `<span class="avp-settings-header-value">${value}${CHEVRON}</span>` +
+        `</div>` +
+        `<div class="avp-settings-body">${body}</div>` +
+      `</div>`;
 
-    // Playback speed
+    // Speed
     const currentRate = this._video.playbackRate ?? 1;
+    const speedLabel = Math.abs(currentRate - 1) < 0.01 ? "Normal" : `${currentRate}x`;
     let speedItems = "";
     for (const spd of PLAYBACK_SPEEDS) {
       const active = Math.abs(spd - currentRate) < 0.01;
       const label = spd === 1 ? "Normal" : `${spd}x`;
       speedItems += `<div class="avp-settings-item${active ? " active" : ""}" data-speed="${spd}">${label}</div>`;
     }
-    sections.push(`<div class="avp-settings-section"><div class="avp-settings-label">Speed</div>${speedItems}</div>`);
-
-    // Subtitle tracks
-    const subs = this._video.subtitleTracks ?? [];
-    if (subs.length > 0) {
-      let subItems = `<div class="avp-settings-item" data-subtitle="-1">Off</div>`;
-      for (const t of subs) {
-        subItems += `<div class="avp-settings-item" data-subtitle="${t.id}">${t.language ?? `Track ${t.id}`}</div>`;
-      }
-      sections.push(`<div class="avp-settings-section"><div class="avp-settings-label">Subtitles</div>${subItems}</div>`);
-    }
+    sections.push(section("speed", "Speed", speedLabel, speedItems));
 
     // Audio tracks
     const audios = this._video.audioTracks ?? [];
@@ -604,27 +590,87 @@ export class AvbridgePlayerElement extends HTMLElement {
       for (const t of audios) {
         audioItems += `<div class="avp-settings-item" data-audio="${t.id}">${t.language ?? `Track ${t.id}`}</div>`;
       }
-      sections.push(`<div class="avp-settings-section"><div class="avp-settings-label">Audio</div>${audioItems}</div>`);
+      sections.push(section("audio", "Audio", audios[0]?.language ?? "Track 1", audioItems));
     }
 
-    // Stats for nerds
-    sections.push(`<div class="avp-settings-section"><div class="avp-settings-item" data-stats>Stats for nerds</div></div>`);
+    // Subtitle tracks
+    const subs = this._video.subtitleTracks ?? [];
+    if (subs.length > 0) {
+      let subItems = `<div class="avp-settings-item active" data-subtitle="-1">Off</div>`;
+      for (const t of subs) {
+        subItems += `<div class="avp-settings-item" data-subtitle="${t.id}">${t.language ?? `Track ${t.id}`}</div>`;
+      }
+      sections.push(section("subtitles", "Subtitles", "Off", subItems));
+    }
 
-    this._settingsMenu.innerHTML = sections.join("");
+    // Fit mode — opt-in via the `show-fit` attribute
+    if (this.hasAttribute("show-fit")) {
+      const currentFit = (this._video.fit ?? "contain") as FitMode;
+      const fitLabel = currentFit[0].toUpperCase() + currentFit.slice(1);
+      let fitItems = "";
+      for (const mode of FIT_MODES) {
+        const active = mode === currentFit;
+        const label = mode[0].toUpperCase() + mode.slice(1);
+        fitItems += `<div class="avp-settings-item${active ? " active" : ""}" data-fit="${mode}">${label}</div>`;
+      }
+      sections.push(section("fit", "Fit", fitLabel, fitItems));
+    }
 
-    // Bind click handlers
-    for (const item of this._settingsMenu.querySelectorAll("[data-fit]")) {
-      item.addEventListener("click", (e) => {
+    // Consumer-added sections
+    for (const cfg of this._customSections) {
+      const activeItem = cfg.items.find((i) => i.active);
+      let items = "";
+      for (const item of cfg.items) {
+        items += `<div class="avp-settings-item${item.active ? " active" : ""}" data-custom-section="${cfg.id}" data-custom-item="${item.id}">${item.label}</div>`;
+      }
+      sections.push(section(`custom-${cfg.id}`, cfg.label, activeItem?.label ?? "", items));
+    }
+
+    // Stats for nerds — toggle row, not an accordion section
+    sections.push(
+      `<div class="avp-settings-section">` +
+        `<div class="avp-settings-header" data-stats>` +
+          `<span class="avp-settings-header-label">Stats for Nerds</span>` +
+          `<span class="avp-settings-header-value"></span>` +
+        `</div>` +
+      `</div>`,
+    );
+
+    // Preserve the handle, replace everything after it.
+    const handle = this._settingsMenu.querySelector(".avp-settings-handle");
+    this._settingsMenu.innerHTML = "";
+    if (handle) this._settingsMenu.appendChild(handle);
+    else this._settingsMenu.insertAdjacentHTML("afterbegin", `<div class="avp-settings-handle"></div>`);
+    this._settingsMenu.insertAdjacentHTML("beforeend", sections.join(""));
+
+    // ── Accordion toggle ──
+    for (const header of this._settingsMenu.querySelectorAll("[data-section-toggle]")) {
+      header.addEventListener("click", (e) => {
         e.stopPropagation();
-        const mode = (item as HTMLElement).dataset.fit as FitMode;
-        this.setAttribute("fit", mode);
-        this._buildSettingsMenu();
+        const id = (header as HTMLElement).dataset.sectionToggle!;
+        const sec = this._settingsMenu.querySelector(`[data-section="${id}"]`);
+        if (!sec) return;
+        const wasOpen = sec.hasAttribute("data-expanded");
+        // Collapse all sections first (only one open at a time).
+        for (const s of this._settingsMenu.querySelectorAll("[data-expanded]")) {
+          s.removeAttribute("data-expanded");
+        }
+        if (!wasOpen) sec.setAttribute("data-expanded", "");
       });
     }
+
+    // ── Item handlers ──
     for (const item of this._settingsMenu.querySelectorAll("[data-speed]")) {
       item.addEventListener("click", (e) => {
         e.stopPropagation();
         this._video.playbackRate = Number((item as HTMLElement).dataset.speed);
+        this._buildSettingsMenu();
+      });
+    }
+    for (const item of this._settingsMenu.querySelectorAll("[data-audio]")) {
+      item.addEventListener("click", (e) => {
+        e.stopPropagation();
+        void this._video.setAudioTrack(Number((item as HTMLElement).dataset.audio));
         this._buildSettingsMenu();
       });
     }
@@ -633,19 +679,29 @@ export class AvbridgePlayerElement extends HTMLElement {
         e.stopPropagation();
         const id = Number((item as HTMLElement).dataset.subtitle);
         void this._video.setSubtitleTrack(id >= 0 ? id : null);
-        this._closeSettings();
+        this._buildSettingsMenu();
       });
     }
-    for (const item of this._settingsMenu.querySelectorAll("[data-audio]")) {
+    for (const item of this._settingsMenu.querySelectorAll("[data-fit]")) {
       item.addEventListener("click", (e) => {
         e.stopPropagation();
-        void this._video.setAudioTrack(Number((item as HTMLElement).dataset.audio));
-        this._closeSettings();
+        this.setAttribute("fit", (item as HTMLElement).dataset.fit!);
+        this._buildSettingsMenu();
       });
     }
-    const statsItem = this._settingsMenu.querySelector("[data-stats]");
-    if (statsItem) {
-      statsItem.addEventListener("click", (e) => {
+    for (const item of this._settingsMenu.querySelectorAll("[data-custom-item]")) {
+      item.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const sectionId = (item as HTMLElement).dataset.customSection!;
+        const itemId = (item as HTMLElement).dataset.customItem!;
+        const cfg = this._customSections.find((s) => s.id === sectionId);
+        cfg?.onSelect(itemId);
+        this._buildSettingsMenu();
+      });
+    }
+    const statsHeader = this._settingsMenu.querySelector("[data-stats]");
+    if (statsHeader) {
+      statsHeader.addEventListener("click", (e) => {
         e.stopPropagation();
         this._toggleStats();
         this._closeSettings();
@@ -1008,6 +1064,17 @@ export class AvbridgePlayerElement extends HTMLElement {
     return this._video.destroy();
   }
   async setAudioTrack(id: number): Promise<void> { return this._video.setAudioTrack(id); }
+
+  addSettingsSection(config: SettingsSectionConfig): void {
+    this._customSections = this._customSections.filter((s) => s.id !== config.id);
+    this._customSections.push(config);
+    this._buildSettingsMenu();
+  }
+
+  removeSettingsSection(id: string): void {
+    this._customSections = this._customSections.filter((s) => s.id !== id);
+    this._buildSettingsMenu();
+  }
   async setSubtitleTrack(id: number | null): Promise<void> { return this._video.setSubtitleTrack(id); }
   getDiagnostics(): unknown { return this._video.getDiagnostics(); }
   canPlayType(mime: string): string { return this._video.canPlayType(mime); }

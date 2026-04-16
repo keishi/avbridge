@@ -465,3 +465,28 @@ export interface ConvertResult {
    */
   notes?: string[];
 }
+
+// ── Settings extensibility ──────────────────────────────────────────────
+
+/**
+ * Configuration for a custom settings section added to `<avbridge-player>`
+ * via {@link addSettingsSection}. Sections render in the bottom-sheet
+ * settings panel alongside built-in sections (Speed, Audio, Subtitles,
+ * Fit, Stats for Nerds). The player owns rendering — consumers describe
+ * data; avbridge renders it in a consistent visual style.
+ */
+export interface SettingsSectionConfig {
+  /** Unique id for this section. Used to update/remove later. */
+  id: string;
+  /** Display label (e.g. "Quality", "Translate"). */
+  label: string;
+  /** Items to show when the section is expanded. */
+  items: Array<{
+    id: string;
+    label: string;
+    /** Mark the currently-selected item. */
+    active?: boolean;
+  }>;
+  /** Called when the user picks an item. */
+  onSelect(itemId: string): void;
+}

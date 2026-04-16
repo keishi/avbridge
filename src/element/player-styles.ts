@@ -484,56 +484,130 @@ export const PLAYER_STYLES = /* css */ `
 
 .avp-spacer { flex: 1; }
 
-/* ── Settings menu ────────────────────────────────────────────────────── */
+/* ── Settings bottom sheet ────────────────────────────────────────────── */
 
-.avp-settings {
+/* Scrim — semi-transparent overlay behind the sheet, above the video.
+   Tapping it dismisses the sheet. */
+.avp-settings-scrim {
   position: absolute;
-  bottom: 52px;
-  right: 12px;
-  background: rgba(28, 28, 28, 0.95);
-  border-radius: 8px;
-  min-width: 180px;
-  /* max-height and max-width are set by JS (_fitSettingsToPlayer)
-     on each open to match the player's actual dimensions. Fallback
-     values here for the brief frame before JS runs. */
-  max-height: 300px;
-  max-width: 320px;
-  overflow-y: auto;
-  display: none;
-  z-index: 10;
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
+  inset: 0;
+  z-index: 9;
+  background: rgba(0, 0, 0, 0.4);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.2s;
 }
 
-.avp-settings.open { display: block; }
+.avp-settings-scrim.open {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* Sheet container — slides up from the bottom. Height is content-driven
+   up to a JS-measured max (set on open via style.maxHeight). */
+.avp-settings {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  z-index: 10;
+  background: rgba(28, 28, 28, 0.97);
+  border-radius: 12px 12px 0 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  transform: translateY(100%);
+  transition: transform 0.2s ease-out;
+  max-height: 70%;
+  padding-bottom: 52px;
+  box-shadow: 0 -4px 20px rgba(0, 0, 0, 0.5);
+}
+
+.avp-settings.open {
+  transform: translateY(0);
+}
+
+/* Drag handle indicator at top of sheet. */
+.avp-settings-handle {
+  width: 36px;
+  height: 4px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.3);
+  margin: 8px auto 4px;
+}
+
+/* ── Accordion sections ──────────────────────────────────────────────── */
 
 .avp-settings-section {
-  padding: 8px 0;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
 }
 
 .avp-settings-section:last-child { border-bottom: none; }
 
-.avp-settings-label {
-  padding: 4px 16px;
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  opacity: 0.5;
-}
-
-.avp-settings-item {
+/* Section header — clickable row showing label + current value. */
+.avp-settings-header {
   display: flex;
   align-items: center;
-  padding: 8px 16px;
-  font-size: 13px;
+  justify-content: space-between;
+  padding: 12px 16px;
   cursor: pointer;
+  font-size: 14px;
   transition: background 0.1s;
 }
 
-.avp-settings-item:hover { background: rgba(255, 255, 255, 0.1); }
+.avp-settings-header:hover { background: rgba(255, 255, 255, 0.06); }
+
+.avp-settings-header-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 500;
+}
+
+.avp-settings-header-value {
+  opacity: 0.6;
+  font-size: 13px;
+}
+
+/* Chevron rotates when section is expanded. */
+.avp-settings-chevron {
+  width: 16px;
+  height: 16px;
+  opacity: 0.5;
+  transition: transform 0.15s;
+  flex-shrink: 0;
+  margin-left: 8px;
+}
+
+.avp-settings-section[data-expanded] .avp-settings-chevron {
+  transform: rotate(180deg);
+}
+
+/* Expanded section body — hidden by default, shown via data-expanded. */
+.avp-settings-body {
+  display: none;
+  padding: 0 8px 8px;
+}
+
+.avp-settings-section[data-expanded] .avp-settings-body {
+  display: block;
+}
+
+/* Items inside expanded body. */
+.avp-settings-item {
+  display: flex;
+  align-items: center;
+  padding: 10px 12px;
+  font-size: 13px;
+  cursor: pointer;
+  border-radius: 6px;
+  transition: background 0.1s;
+}
+
+.avp-settings-item:hover { background: rgba(255, 255, 255, 0.08); }
 
 .avp-settings-item.active {
   color: #3ea6ff;
+  background: rgba(62, 166, 255, 0.1);
 }
 
 .avp-settings-item.active::before {

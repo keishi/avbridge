@@ -36,6 +36,7 @@ export type {
   HardwareAccelerationHint,
   FetchFn,
   TransportConfig,
+  SettingsSectionConfig,
 } from "./types.js";
 
 export { classify } from "./classify/index.js";
