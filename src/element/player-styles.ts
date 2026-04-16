@@ -493,10 +493,7 @@ export const PLAYER_STYLES = /* css */ `
   background: rgba(28, 28, 28, 0.95);
   border-radius: 8px;
   min-width: 220px;
-  /* Fit within the player: leave room for the controls bar (52px bottom)
-     and a small top margin (8px). On tall players this caps at 300px;
-     on short players it shrinks to whatever fits. */
-  max-height: min(300px, calc(100% - 52px - 8px));
+  max-height: 300px;
   overflow-y: auto;
   display: none;
   z-index: 10;
