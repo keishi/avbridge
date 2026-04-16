@@ -823,9 +823,16 @@ export class AvbridgePlayerElement extends HTMLElement {
   }
 
   private _onContainerClick(e: MouseEvent): void {
-    // Ignore clicks on controls
+    // Ignore clicks on controls and slotted content
     if ((e.target as HTMLElement).closest?.(".avp-controls, .avp-settings, .avp-overlay-btn")) return;
     if (this._isSlottedContentEvent(e)) return;
+
+    // If the bottom sheet is open, any click outside it dismisses
+    // instead of toggling play/pause.
+    if (this._settingsOpen) {
+      this._closeSettings();
+      return;
+    }
 
     // Touch taps are handled by _onPointerUp (show/hide controls + double-tap).
     // The browser fires a synthetic click after touchend — skip it.
@@ -871,6 +878,12 @@ export class AvbridgePlayerElement extends HTMLElement {
     // Ignore touches on controls — buttons have their own handlers
     if ((e.target as HTMLElement).closest?.(".avp-controls, .avp-settings, .avp-overlay-btn")) return;
     if (this._isSlottedContentEvent(e)) return;
+
+    // If the bottom sheet is open, dismiss it on any touch outside.
+    if (this._settingsOpen) {
+      this._closeSettings();
+      return;
+    }
 
     // Double-tap detection
     const now = Date.now();
