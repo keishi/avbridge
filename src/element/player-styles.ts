@@ -568,20 +568,22 @@ export const PLAYER_STYLES = /* css */ `
   margin-left: auto;
   opacity: 0.6;
   font-size: 13px;
+  text-align: right;
 }
 
-/* Invisible native <select> layered over the header row. Tapping opens
-   the OS picker (which renders OUTSIDE the shadow DOM / player bounds —
-   intentional for small players). The select is full-width/height of
-   the header so the entire row is tappable. */
+/* Invisible native <select> layered over the value portion of the row.
+   Covers from the value text to the right edge so tapping the value
+   opens the OS picker. The label side remains inert. */
 .avp-settings-select {
   position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 50%;
   opacity: 0;
   cursor: pointer;
   font-size: 16px;
+  text-align: right;
 }
 
 /* Toggle-style rows (Stats for Nerds) — no select, just clickable. */
