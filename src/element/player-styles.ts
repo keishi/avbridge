@@ -583,7 +583,7 @@ export const PLAYER_STYLES = /* css */ `
   opacity: 0;
   cursor: pointer;
   font-size: 16px;
-  text-align: right;
+  direction: rtl;
 }
 
 /* Toggle-style rows (Stats for Nerds) — no select, just clickable. */
