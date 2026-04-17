@@ -564,6 +564,12 @@ export const PLAYER_STYLES = /* css */ `
   font-weight: 500;
 }
 
+.avp-settings-header-value {
+  margin-left: auto;
+  opacity: 0.6;
+  font-size: 13px;
+}
+
 /* Invisible native <select> layered over the header row. Tapping opens
    the OS picker (which renders OUTSIDE the shadow DOM / player bounds —
    intentional for small players). The select is full-width/height of

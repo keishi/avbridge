@@ -566,23 +566,25 @@ export class AvbridgePlayerElement extends HTMLElement {
     // a styled label+value. Tapping opens the OS picker (escapes the
     // shadow DOM — intentional for small players). The visible label
     // updates on change.
-    const selectRow = (label: string, options: string, selectAttrs: string): string =>
+    const selectRow = (label: string, currentValue: string, options: string, selectAttrs: string): string =>
       `<div class="avp-settings-section">` +
         `<div class="avp-settings-header">` +
           `<span class="avp-settings-header-label">${label}</span>` +
+          `<span class="avp-settings-header-value">${currentValue}</span>` +
           `<select class="avp-settings-select" ${selectAttrs}>${options}</select>` +
         `</div>` +
       `</div>`;
 
     // Speed
     const currentRate = this._video.playbackRate ?? 1;
+    const speedValue = Math.abs(currentRate - 1) < 0.01 ? "Normal" : `${currentRate}x`;
     let speedOpts = "";
     for (const spd of PLAYBACK_SPEEDS) {
       const sel = Math.abs(spd - currentRate) < 0.01 ? " selected" : "";
       const label = spd === 1 ? "Normal" : `${spd}x`;
       speedOpts += `<option value="${spd}"${sel}>${label}</option>`;
     }
-    sections.push(selectRow("Speed", speedOpts, `data-action="speed"`));
+    sections.push(selectRow("Speed", speedValue, speedOpts, `data-action="speed"`));
 
     // Audio tracks
     const audios = this._video.audioTracks ?? [];
@@ -591,7 +593,7 @@ export class AvbridgePlayerElement extends HTMLElement {
       for (const t of audios) {
         audioOpts += `<option value="${t.id}">${t.language ?? `Track ${t.id}`}</option>`;
       }
-      sections.push(selectRow("Audio", audioOpts, `data-action="audio"`));
+      sections.push(selectRow("Audio", audios[0]?.language ?? "Track 1", audioOpts, `data-action="audio"`));
     }
 
     // Subtitle tracks
@@ -601,29 +603,31 @@ export class AvbridgePlayerElement extends HTMLElement {
       for (const t of subs) {
         subOpts += `<option value="${t.id}">${t.language ?? `Track ${t.id}`}</option>`;
       }
-      sections.push(selectRow("Subtitles", subOpts, `data-action="subtitle"`));
+      sections.push(selectRow("Subtitles", "Off", subOpts, `data-action="subtitle"`));
     }
 
     // Fit mode — opt-in via the `show-fit` attribute
     if (this.hasAttribute("show-fit")) {
       const currentFit = (this._video.fit ?? "contain") as FitMode;
+      const fitValue = currentFit[0].toUpperCase() + currentFit.slice(1);
       let fitOpts = "";
       for (const mode of FIT_MODES) {
         const sel = mode === currentFit ? " selected" : "";
         const label = mode[0].toUpperCase() + mode.slice(1);
         fitOpts += `<option value="${mode}"${sel}>${label}</option>`;
       }
-      sections.push(selectRow("Fit", fitOpts, `data-action="fit"`));
+      sections.push(selectRow("Fit", fitValue, fitOpts, `data-action="fit"`));
     }
 
     // Consumer-added sections
     for (const cfg of this._customSections) {
+      const activeItem = cfg.items.find((i) => i.active);
       let customOpts = "";
       for (const item of cfg.items) {
         const sel = item.active ? " selected" : "";
         customOpts += `<option value="${item.id}"${sel}>${item.label}</option>`;
       }
-      sections.push(selectRow(cfg.label, customOpts, `data-action="custom" data-custom-id="${cfg.id}"`));
+      sections.push(selectRow(cfg.label, activeItem?.label ?? "", customOpts, `data-action="custom" data-custom-id="${cfg.id}"`));
     }
 
     // Stats for nerds — toggle row (no select)
