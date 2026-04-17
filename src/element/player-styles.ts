@@ -545,6 +545,7 @@ export const PLAYER_STYLES = /* css */ `
 
 /* Section header — clickable row showing label + current value. */
 .avp-settings-header {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: space-between;
