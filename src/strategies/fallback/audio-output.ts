@@ -80,6 +80,10 @@ export class AudioOutput implements ClockSource {
   private _volume = 1;
   /** User-set muted flag. When true, gain is forced to 0. */
   private _muted = false;
+  /** Playback rate. Scales the media clock and each AudioBufferSourceNode's
+   *  playbackRate so audio pitches up/down accordingly (same as native
+   *  <video>.playbackRate). Default 1. */
+  private _rate = 1;
 
   constructor() {
     this.ctx = new AudioContext();
@@ -107,6 +111,24 @@ export class AudioOutput implements ClockSource {
     return this._muted;
   }
 
+  /** Set playback rate. Scales the media clock and pitches audio output
+   *  (same as native <video>.playbackRate — speed without pitch correction).
+   *  Rebases the anchor so the clock transition is seamless. */
+  setPlaybackRate(rate: number): void {
+    if (rate === this._rate) return;
+    // Rebase anchor at the current media time before changing rate,
+    // so the clock doesn't jump.
+    const t = this.now();
+    this.mediaTimeOfAnchor = t;
+    this.ctxTimeAtAnchor = this.ctx.currentTime;
+    this.wallAnchorMs = performance.now();
+    this._rate = rate;
+  }
+
+  getPlaybackRate(): number {
+    return this._rate;
+  }
+
   private applyGain(): void {
     const target = this._muted ? 0 : this._volume;
     try { this.gain.gain.value = target; } catch { /* ignore */ }
@@ -127,12 +149,12 @@ export class AudioOutput implements ClockSource {
   now(): number {
     if (this.noAudio) {
       if (this.state === "playing") {
-        return this.mediaTimeOfAnchor + (performance.now() - this.wallAnchorMs) / 1000;
+        return this.mediaTimeOfAnchor + (performance.now() - this.wallAnchorMs) / 1000 * this._rate;
       }
       return this.mediaTimeOfAnchor;
     }
     if (this.state === "playing") {
-      return this.mediaTimeOfAnchor + (this.ctx.currentTime - this.ctxTimeAtAnchor);
+      return this.mediaTimeOfAnchor + (this.ctx.currentTime - this.ctxTimeAtAnchor) * this._rate;
     }
     return this.mediaTimeOfAnchor;
   }
@@ -200,9 +222,12 @@ export class AudioOutput implements ClockSource {
     const node = this.ctx.createBufferSource();
     node.buffer = buffer;
     node.connect(this.gain);
+    // Pitch the audio to match the playback rate (same as native <video>).
+    if (this._rate !== 1) node.playbackRate.value = this._rate;
 
-    // Convert media time → ctx time using the anchor.
-    let ctxStart = this.ctxTimeAtAnchor + (this.mediaTimeOfNext - this.mediaTimeOfAnchor);
+    // Convert media time → ctx time using the anchor + rate. At rate=2,
+    // each second of media time occupies 0.5s of ctx time.
+    let ctxStart = this.ctxTimeAtAnchor + (this.mediaTimeOfNext - this.mediaTimeOfAnchor) / this._rate;
 
     // When the decoder is slower than realtime, `ctxStart` falls into
     // the past (ctx.currentTime has already passed it). Clamping each

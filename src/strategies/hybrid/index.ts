@@ -84,6 +84,14 @@ export async function createHybridSession(
       get: () => ctx.duration ?? NaN,
     });
   }
+  Object.defineProperty(target, "playbackRate", {
+    configurable: true,
+    get: () => audio.getPlaybackRate(),
+    set: (v: number) => {
+      audio.setPlaybackRate(v);
+      target.dispatchEvent(new Event("ratechange"));
+    },
+  });
   // HTMLMediaElement parity surfaces — see fallback/index.ts for rationale.
   Object.defineProperty(target, "readyState", {
     configurable: true,
@@ -213,6 +221,7 @@ export async function createHybridSession(
         delete (target as unknown as Record<string, unknown>).muted;
         delete (target as unknown as Record<string, unknown>).readyState;
         delete (target as unknown as Record<string, unknown>).seekable;
+        delete (target as unknown as Record<string, unknown>).playbackRate;
       } catch { /* ignore */ }
     },
 

@@ -128,6 +128,17 @@ export async function createFallbackSession(
       get: () => ctx.duration ?? NaN,
     });
   }
+  // Playback rate — canvas strategies don't use the real <video>, so the
+  // native playbackRate property does nothing. Patch it to drive the
+  // AudioOutput clock speed + pitch.
+  Object.defineProperty(target, "playbackRate", {
+    configurable: true,
+    get: () => audio.getPlaybackRate(),
+    set: (v: number) => {
+      audio.setPlaybackRate(v);
+      target.dispatchEvent(new Event("ratechange"));
+    },
+  });
   // Synthesize HTMLMediaElement parity surfaces that the canvas strategies
   // can't otherwise answer truthfully (the inner <video> has no src, so
   // its own readyState/seekable are zero/empty).
@@ -351,6 +362,7 @@ export async function createFallbackSession(
         delete (target as unknown as Record<string, unknown>).muted;
         delete (target as unknown as Record<string, unknown>).readyState;
         delete (target as unknown as Record<string, unknown>).seekable;
+        delete (target as unknown as Record<string, unknown>).playbackRate;
       } catch { /* ignore */ }
     },
 
