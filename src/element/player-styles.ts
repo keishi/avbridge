@@ -34,7 +34,6 @@ export const PLAYER_STYLES = /* css */ `
   position: relative;
   width: 100%;
   height: 100%;
-  cursor: pointer;
   -webkit-tap-highlight-color: transparent;
   user-select: none;
 }
