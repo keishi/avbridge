@@ -281,6 +281,10 @@ export class AudioOutput implements ClockSource {
       await this.ctx.resume();
     }
 
+    // Reconnect the gain node — pause() disconnects it to cut off
+    // in-flight audio instantly. Safe to call even if already connected.
+    try { this.gain.connect(this.ctx.destination); } catch { /* ignore */ }
+
     if (this.state === "paused") {
       // Resume: media time should continue from where we paused. ctx.currentTime
       // is preserved across suspend/resume, so re-anchoring it to "now" with
@@ -317,6 +321,12 @@ export class AudioOutput implements ClockSource {
     this.mediaTimeOfAnchor = this.now();
     this.state = "paused";
     if (this.noAudio) return;
+    // Disconnect the gain node immediately so any in-flight scheduled
+    // buffers are silenced instantly. ctx.suspend() is async and
+    // already-started AudioBufferSourceNodes keep playing until the
+    // context actually suspends — without the disconnect, audio bleeds
+    // through for ~200ms after pause().
+    try { this.gain.disconnect(); } catch { /* ignore */ }
     if (this.ctx.state === "running") {
       await this.ctx.suspend();
     }
