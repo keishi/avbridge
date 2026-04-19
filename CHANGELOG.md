@@ -4,6 +4,37 @@ All notable changes to **avbridge.js** are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.10.0]
+
+Settings UI overhaul + playback rate on all strategies.
+
+### Added
+
+- **Bottom-sheet settings panel** replacing the popup menu. Slides up
+  from the controls bar with a scrim overlay. Each section uses a
+  native `<select>` picker overlaid on a styled row — the OS picker
+  renders outside the player bounds (intentional for small players).
+  Rows show label left, current value right. Tapping anywhere outside
+  the sheet or pressing Escape dismisses it.
+- **Consumer extensibility API**: `player.addSettingsSection({ id,
+  label, items, onSelect })` / `player.removeSettingsSection(id)`.
+  Custom sections render after built-in ones using the same native
+  `<select>` pattern. New `SettingsSectionConfig` type exported.
+- **Playback rate on hybrid + fallback strategies.** `playbackRate`
+  was a no-op on canvas strategies because the inner `<video>` has
+  no `src`. Now patched via `Object.defineProperty` — drives the
+  `AudioOutput` clock speed + `AudioBufferSourceNode.playbackRate`
+  for pitch-shifted audio. Video renderer follows automatically
+  since it syncs to `audio.now()`. The `ratechange` event fires.
+
+### Fixed
+
+- **Settings menu sizing** — JS-measured max-height (70% of player)
+  replaces the broken CSS percentage approach.
+- **Blue tap-highlight flash** suppressed on `<avbridge-player>`.
+- **`cursor: pointer` removed** from the player container — the
+  video surface isn't a button.
+
 ## [2.9.0]
 
 Player chrome ergonomics — four changes driven by explorer integration
