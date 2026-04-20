@@ -101,6 +101,8 @@ export class AvbridgePlayerElement extends HTMLElement {
   private _state: PlayerState = "idle";
   private _controlsTimer: ReturnType<typeof setTimeout> | null = null;
   private _settingsOpen = false;
+  private _activeAudioTrackId: number | null = null;
+  private _activeSubtitleTrackId: number | null = null;
   private _userSeeking = false;
   private _holdTimer: ReturnType<typeof setTimeout> | null = null;
   private _holdSpeedActive = false;
@@ -589,21 +591,29 @@ export class AvbridgePlayerElement extends HTMLElement {
     // Audio tracks
     const audios = this._video.audioTracks ?? [];
     if (audios.length > 1) {
+      const activeAudioId = this._activeAudioTrackId ?? audios[0]?.id;
+      const activeAudio = audios.find((t: { id: number }) => t.id === activeAudioId) ?? audios[0];
+      const audioValue = activeAudio?.language ?? `Track ${activeAudio?.id ?? 1}`;
       let audioOpts = "";
       for (const t of audios) {
-        audioOpts += `<option value="${t.id}">${t.language ?? `Track ${t.id}`}</option>`;
+        const sel = t.id === activeAudioId ? " selected" : "";
+        audioOpts += `<option value="${t.id}"${sel}>${t.language ?? `Track ${t.id}`}</option>`;
       }
-      sections.push(selectRow("Audio", audios[0]?.language ?? "Track 1", audioOpts, `data-action="audio"`));
+      sections.push(selectRow("Audio", audioValue, audioOpts, `data-action="audio"`));
     }
 
     // Subtitle tracks
     const subs = this._video.subtitleTracks ?? [];
     if (subs.length > 0) {
-      let subOpts = `<option value="-1" selected>Off</option>`;
+      const activeSubId = this._activeSubtitleTrackId;
+      const activeSub = activeSubId != null ? subs.find((t: { id: number }) => t.id === activeSubId) : null;
+      const subValue = activeSub ? (activeSub.language ?? `Track ${activeSub.id}`) : "Off";
+      let subOpts = `<option value="-1"${activeSubId == null ? " selected" : ""}>Off</option>`;
       for (const t of subs) {
-        subOpts += `<option value="${t.id}">${t.language ?? `Track ${t.id}`}</option>`;
+        const sel = t.id === activeSubId ? " selected" : "";
+        subOpts += `<option value="${t.id}"${sel}>${t.language ?? `Track ${t.id}`}</option>`;
       }
-      sections.push(selectRow("Subtitles", "Off", subOpts, `data-action="subtitle"`));
+      sections.push(selectRow("Subtitles", subValue, subOpts, `data-action="subtitle"`));
     }
 
     // Fit mode — opt-in via the `show-fit` attribute
@@ -657,11 +667,15 @@ export class AvbridgePlayerElement extends HTMLElement {
             this._video.playbackRate = Number(val);
             break;
           case "audio":
+            this._activeAudioTrackId = Number(val);
             void this._video.setAudioTrack(Number(val));
             break;
-          case "subtitle":
-            void this._video.setSubtitleTrack(Number(val) >= 0 ? Number(val) : null);
+          case "subtitle": {
+            const subId = Number(val);
+            this._activeSubtitleTrackId = subId >= 0 ? subId : null;
+            void this._video.setSubtitleTrack(subId >= 0 ? subId : null);
             break;
+          }
           case "fit":
             this.setAttribute("fit", val);
             break;
