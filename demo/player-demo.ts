@@ -5,8 +5,12 @@
 // Import the class and register it directly — Rollup tree-shakes
 // side-effect-only imports, so we must use the import concretely.
 import { AvbridgePlayerElement } from "../src/player-element.js";
+import { AvbridgeSubtitlesElement } from "../src/element/avbridge-subtitles.js";
 if (!customElements.get("avbridge-player")) {
   customElements.define("avbridge-player", AvbridgePlayerElement);
+}
+if (!customElements.get("avbridge-subtitles")) {
+  customElements.define("avbridge-subtitles", AvbridgeSubtitlesElement);
 }
 
 const fileInput = document.getElementById("file") as HTMLInputElement;
