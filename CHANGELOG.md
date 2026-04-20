@@ -4,6 +4,40 @@ All notable changes to **avbridge.js** are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.11.0]
+
+Subtitle panel, interaction fixes, and quality-of-life.
+
+### Added
+
+- **`<avbridge-subtitles>` element** — scrollable cue timeline panel.
+  Connects to a player via `for` attribute, renders all subtitle cues
+  as timestamped rows, highlights the active cue, auto-scrolls to
+  follow playback, and click-to-seek. Shadow DOM with dark styles.
+- **Frame-by-frame keyboard shortcuts** (`,` / `.`) — YouTube-style.
+  Pauses if playing, then steps back/forward one frame (1/fps).
+- **Real-time scrub seeking on narrow seekbars** — when the seekbar
+  is <400px wide, dragging seeks in real-time (throttled to 4 Hz)
+  instead of preview-only. Immediate video feedback on small players.
+- **`controls-timeout` attribute** on `<avbridge-player>`. Customize
+  the auto-hide duration (default 3000ms). Set to `"0"` to disable
+  auto-hide entirely (always-visible controls).
+
+### Fixed
+
+- **Subtitles not showing** — `addSubtitle()` didn't dispatch
+  `trackschange` (settings sheet never showed the new track) and the
+  `<track>` element was created with `mode="disabled"` (never
+  rendered on native strategy). Now dispatches + auto-enables.
+- **Audio bleed on pause** for hybrid/fallback — already-scheduled
+  AudioBufferSourceNodes kept playing ~200ms after pause. Now
+  disconnects the gain node immediately (same pattern as seek/reset).
+- **Double-tap fires both ff/rw AND fullscreen on touch** — browser's
+  synthetic `dblclick` after two rapid taps was calling fullscreen
+  on top of the touch handler's ff/rw. Blocked via a consumed flag.
+- **Settings sheet didn't show active audio/subtitle selection** —
+  always displayed "Track 1" / "Off" regardless of actual state.
+
 ## [2.10.0]
 
 Settings UI overhaul + playback rate on all strategies.
