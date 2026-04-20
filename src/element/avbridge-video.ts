@@ -856,15 +856,35 @@ export class AvbridgeVideoElement extends HTMLElementCtor {
       sidecarUrl: subtitle.url,
     };
     this._subtitleTracks.push(track);
+    // eslint-disable-next-line no-console
+    console.log(`[avbridge:subs] addSubtitle id=${track.id} format=${format} lang=${subtitle.language ?? "?"}`);
     await attachSubtitleTracks(
       this._videoEl,
       this._subtitleTracks,
       undefined,
       (err, t) => {
         // eslint-disable-next-line no-console
-        console.warn(`[avbridge] subtitle ${t.id} failed: ${err.message}`);
+        console.warn(`[avbridge:subs] subtitle ${t.id} failed: ${err.message}`);
       },
     );
+    // Enable the newly-added track so it renders immediately. On native
+    // strategy the <video>'s textTrack must be mode="showing"; on canvas
+    // strategies the renderer's watchTextTracks picks it up from the
+    // hidden-mode textTracks.
+    const textTracks = this._videoEl.textTracks;
+    for (let i = 0; i < textTracks.length; i++) {
+      if (textTracks[i].label === (subtitle.language ?? `Subtitle ${track.id}`)) {
+        textTracks[i].mode = "showing";
+        // eslint-disable-next-line no-console
+        console.log(`[avbridge:subs] enabled textTrack[${i}] mode=showing`);
+        break;
+      }
+    }
+    // Notify the settings sheet so it rebuilds with the new track.
+    this._dispatch("trackschange", {
+      audioTracks: this._audioTracks,
+      subtitleTracks: this.subtitleTracks,
+    });
   }
 
   /**

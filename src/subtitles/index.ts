@@ -110,6 +110,8 @@ export async function attachSubtitleTracks(
 
   for (const t of tracks) {
     if (!t.sidecarUrl) continue;
+    // eslint-disable-next-line no-console
+    console.log(`[avbridge:subs] attaching track id=${t.id} format=${t.format} url=${t.sidecarUrl.slice(0, 60)}`);
     try {
       let url = t.sidecarUrl;
       if (t.format === "srt") {
