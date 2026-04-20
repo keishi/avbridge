@@ -39,7 +39,7 @@ function formatTime(sec: number): string {
 }
 
 const PLAYBACK_SPEEDS = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2] as const;
-const CONTROLS_HIDE_MS = 3000;
+const DEFAULT_CONTROLS_HIDE_MS = 3000;
 
 type PlayerState = "idle" | "loading" | "playing" | "paused" | "buffering" | "ended" | "error";
 
@@ -797,16 +797,28 @@ export class AvbridgePlayerElement extends HTMLElement {
     this.showControls();
   }
 
-  private _scheduleHide(durationMs: number = CONTROLS_HIDE_MS): void {
+  private _scheduleHide(durationMs?: number): void {
+    const ms = durationMs ?? this._getControlsTimeout();
     if (this._controlsTimer) clearTimeout(this._controlsTimer);
     if (this._state !== "playing" && this._state !== "buffering") return;
     if (this._settingsOpen) return;
+    // A timeout of 0 or negative means "never hide" (controls always visible).
+    if (ms <= 0) return;
     this._controlsTimer = setTimeout(() => {
       if (this._state === "playing") {
         this.setAttribute("data-controls-hidden", "");
         this._toolbarTop.setAttribute("data-visible", "false");
       }
-    }, durationMs);
+    }, ms);
+  }
+
+  /** Read the controls-timeout attribute. 0 or negative = never hide.
+   *  Unset = default 3000ms. */
+  private _getControlsTimeout(): number {
+    const attr = this.getAttribute("controls-timeout");
+    if (attr == null) return DEFAULT_CONTROLS_HIDE_MS;
+    const n = Number(attr);
+    return Number.isFinite(n) ? n : DEFAULT_CONTROLS_HIDE_MS;
   }
 
   // Strategy is visible in Stats for Nerds, no badge in controls bar.
@@ -821,6 +833,9 @@ export class AvbridgePlayerElement extends HTMLElement {
 
   /** Track whether the last interaction was touch so click handler can skip. */
   private _lastPointerTypeWasTouch = false;
+  /** True for ~50ms after a touch double-tap was handled, so the
+   *  synthetic dblclick from the browser doesn't also fire fullscreen. */
+  private _touchDoubleTapConsumed = false;
 
   /** True if the event's composed path passes through consumer-slotted
    *  content (toolbar or content-overlay). Slotted content lives in the
@@ -865,6 +880,11 @@ export class AvbridgePlayerElement extends HTMLElement {
   private _onContainerDblClick(e: MouseEvent): void {
     if ((e.target as HTMLElement).closest?.(".avp-controls, .avp-settings")) return;
     if (this._isSlottedContentEvent(e)) return;
+    // On touch devices, the browser synthesizes a dblclick after two
+    // rapid taps. But we already handled the double-tap in _onPointerUp
+    // (which does ff/rw on sides, fullscreen in center). Skip the
+    // synthetic dblclick so both don't fire.
+    if (this._touchDoubleTapConsumed) return;
     // Cancel the pending single-click play/pause
     if (this._tapTimer) { clearTimeout(this._tapTimer); this._tapTimer = null; }
     this._toggleFullscreen();
@@ -912,6 +932,10 @@ export class AvbridgePlayerElement extends HTMLElement {
       } else {
         this._toggleFullscreen();
       }
+      // Prevent the synthetic dblclick (fired ~50ms later by the
+      // browser) from also toggling fullscreen.
+      this._touchDoubleTapConsumed = true;
+      setTimeout(() => { this._touchDoubleTapConsumed = false; }, 100);
       this._lastTapTime = 0;
       return;
     }
