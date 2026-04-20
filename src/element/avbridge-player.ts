@@ -437,6 +437,11 @@ export class AvbridgePlayerElement extends HTMLElement {
     return frac * (this._video.duration || 0);
   }
 
+  /** Seekbar width below which drag-to-scrub seeks in real-time (vs
+   *  preview-only). On narrow bars precise positioning is hard, so
+   *  immediate video feedback is more useful than a time tooltip. */
+  private static readonly SCRUB_WIDTH_THRESHOLD = 400;
+
   private _onSeekPointerDown(e: PointerEvent): void {
     // Ignore synthetic clicks originating from the input's own handling
     if (e.button !== 0 && e.pointerType === "mouse") return;
@@ -446,16 +451,32 @@ export class AvbridgePlayerElement extends HTMLElement {
     seekBar.setPointerCapture(e.pointerId);
     seekBar.setAttribute("data-seeking", "");
 
+    // Decide scrub mode based on physical width.
+    const scrubMode = seekBar.getBoundingClientRect().width < AvbridgePlayerElement.SCRUB_WIDTH_THRESHOLD;
+    let lastScrubCommit = 0;
+
     const initial = this._timeFromSeekPointer(e.clientX);
     this._seekInput.value = String(initial);
     this._onSeekInput();
     this._updateSeekTooltip(e.clientX);
+    if (scrubMode) this._onSeekCommit();
 
     const onMove = (ev: PointerEvent) => {
       const t = this._timeFromSeekPointer(ev.clientX);
       this._seekInput.value = String(t);
       this._onSeekInput();
       this._updateSeekTooltip(ev.clientX);
+      // In scrub mode, commit seeks throttled to ~4 Hz so we don't
+      // overwhelm the seek pipeline (especially on canvas strategies
+      // where each seek restarts the decoder pump).
+      if (scrubMode) {
+        const now = performance.now();
+        if (now - lastScrubCommit > 250) {
+          lastScrubCommit = now;
+          this._onSeekCommit();
+          this._userSeeking = true; // keep seeking flag live
+        }
+      }
     };
     const onUp = (ev: PointerEvent) => {
       const t = this._timeFromSeekPointer(ev.clientX);
