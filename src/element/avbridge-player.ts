@@ -953,6 +953,14 @@ export class AvbridgePlayerElement extends HTMLElement {
 
   // ── Keyboard shortcuts ─────────────────────────────────────────────────
 
+  /** Duration of one frame in seconds, derived from diagnostics fps or
+   *  a 30fps default. Used for frame-step shortcuts (`,` / `.`). */
+  private _frameDuration(): number {
+    const diag = this._video.getDiagnostics() as { fps?: number } | null;
+    const fps = diag?.fps && diag.fps > 0 ? diag.fps : 30;
+    return 1 / fps;
+  }
+
   private _onKeydown(e: KeyboardEvent): void {
     // Don't intercept if the user is typing in an input
     if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
@@ -998,6 +1006,21 @@ export class AvbridgePlayerElement extends HTMLElement {
         e.preventDefault();
         this._video.playbackRate = Math.max(0.25, this._video.playbackRate - 0.25);
         this._buildSettingsMenu();
+        break;
+      case ",":
+        // Frame-back (YouTube-style: , while paused steps back one frame)
+        e.preventDefault();
+        if (!this._video.paused) this._video.pause();
+        this._video.currentTime = Math.max(0, this._video.currentTime - this._frameDuration());
+        break;
+      case ".":
+        // Frame-forward (YouTube-style: . while paused steps forward one frame)
+        e.preventDefault();
+        if (!this._video.paused) this._video.pause();
+        this._video.currentTime = Math.min(
+          this._video.duration || 0,
+          this._video.currentTime + this._frameDuration(),
+        );
         break;
       case "Escape":
         if (this._settingsOpen) {
