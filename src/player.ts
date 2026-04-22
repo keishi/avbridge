@@ -132,9 +132,9 @@ export class UnifiedPlayer {
     private readonly options: CreatePlayerOptions,
     private readonly registry: PluginRegistry,
   ) {
-    const { requestInit, fetchFn } = options;
-    if (requestInit || fetchFn) {
-      this.transport = { requestInit, fetchFn };
+    const { requestInit, fetchFn, cacheBytes } = options;
+    if (requestInit || fetchFn || cacheBytes !== undefined) {
+      this.transport = { requestInit, fetchFn, cacheBytes };
     }
   }
 

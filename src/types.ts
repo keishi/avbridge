@@ -287,6 +287,14 @@ export interface CreatePlayerOptions {
    * for interceptors, logging, or environments without a global fetch.
    */
   fetchFn?: FetchFn;
+  /**
+   * Byte budget for the libav HTTP reader's LRU cache of fetched ranges.
+   * Defaults to 8 MB. Set to `0` to disable caching. Raise this when the
+   * app plays seek-heavy legacy-container media from URLs — hot regions
+   * (header/moov, tail index, current window) stay resident instead of
+   * being re-fetched on every bounce.
+   */
+  cacheBytes?: number;
 }
 
 /** Signature-compatible with `globalThis.fetch`. */
@@ -296,6 +304,13 @@ export type FetchFn = (input: RequestInfo | URL, init?: RequestInit) => Promise<
 export interface TransportConfig {
   requestInit?: RequestInit;
   fetchFn?: FetchFn;
+  /**
+   * Byte budget for the libav HTTP reader's LRU cache of fetched ranges.
+   * Defaults to 8 MB. Set to `0` to disable caching entirely. Higher
+   * values help seek-heavy network playback keep hot regions
+   * (header/moov, tail index, current read) resident.
+   */
+  cacheBytes?: number;
 }
 
 /** Events emitted by {@link UnifiedPlayer}. Strongly typed. */

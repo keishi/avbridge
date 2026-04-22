@@ -247,6 +247,11 @@ export class AvbridgePlayerElement extends HTMLElement {
     on(this._video, "ended", () => this._setState("ended"));
     on(this._video, "error", () => this._setState("error"));
     on(this._video, "timeupdate", () => this._updateTime());
+    // `progress` fires as the inner element's buffered ranges grow — keep the
+    // seek bar's buffered indicator fresh even when paused or filling ahead
+    // without timeupdate advancing. `<avbridge-video>` dispatches this on
+    // all strategies (including the synthesized ranges for canvas strategies).
+    on(this._video, "progress", () => this._updateBuffered());
     on(this._video, "volumechange", () => this._updateVolume());
     // Strategy changes are visible in Stats for Nerds.
     on(this._video, "trackschange", () => this._buildSettingsMenu());
@@ -524,15 +529,38 @@ export class AvbridgePlayerElement extends HTMLElement {
     this._seekInput.value = String(t);
     this._updateSeekVisuals(t);
     this._timeDisplay.textContent = `${formatTime(t)} / ${formatTime(d)}`;
+    this._updateBuffered();
+  }
 
-    // Buffered ranges
-    try {
-      const buf = this._video.buffered;
-      if (buf && buf.length > 0 && d > 0) {
-        const end = buf.end(buf.length - 1);
-        this._seekBuffered.style.width = `${(end / d) * 100}%`;
-      }
-    } catch { /* ignore */ }
+  /**
+   * Render every buffered range as its own segment so gaps (common on MSE
+   * after seeks) are visible. Not gated by `_userSeeking` — ranges should
+   * keep updating while the user scrubs, and runs cheaply on `progress`.
+   */
+  private _updateBuffered(): void {
+    const d = this._video.duration;
+    if (!(d > 0)) return;
+    let buf: TimeRanges;
+    try { buf = this._video.buffered; } catch { return; }
+    const count = buf ? buf.length : 0;
+    const host = this._seekBuffered;
+    // Reconcile child count. Segment divs are styled via .avp-seek-buffered-range.
+    while (host.childElementCount > count) host.lastElementChild!.remove();
+    while (host.childElementCount < count) {
+      const seg = document.createElement("div");
+      seg.className = "avp-seek-buffered-range";
+      host.appendChild(seg);
+    }
+    for (let i = 0; i < count; i++) {
+      let start: number; let end: number;
+      try { start = buf.start(i); end = buf.end(i); } catch { continue; }
+      const s = Math.max(0, start);
+      const e = Math.min(d, end);
+      if (e <= s) continue;
+      const seg = host.children[i] as HTMLElement;
+      seg.style.left = `${(s / d) * 100}%`;
+      seg.style.width = `${((e - s) / d) * 100}%`;
+    }
   }
 
   // ── Controls: volume ───────────────────────────────────────────────────

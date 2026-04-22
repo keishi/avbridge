@@ -286,6 +286,12 @@ export const PLAYER_STYLES = /* css */ `
   display: flex;
   align-items: center;
   cursor: pointer;
+  /* Claim all touch gestures on the seek bar. Without this, Android
+   * browsers (Chrome, Samsung Internet) treat horizontal drags as
+   * scroll candidates and cancel pointermove once the gesture
+   * resolves, breaking scrub. touch-action must be set in CSS —
+   * preventDefault() on pointerdown is too late. */
+  touch-action: none;
 }
 
 .avp-seek-track {
@@ -303,7 +309,13 @@ export const PLAYER_STYLES = /* css */ `
 
 .avp-seek-buffered {
   position: absolute;
-  left: 0;
+  inset: 0;
+  pointer-events: none;
+}
+
+.avp-seek-buffered-range {
+  position: absolute;
+  top: 0;
   height: 100%;
   background: rgba(255, 255, 255, 0.35);
   border-radius: inherit;

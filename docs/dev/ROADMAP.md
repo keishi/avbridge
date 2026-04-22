@@ -181,7 +181,6 @@ supports the codec.
 
 - OffscreenCanvas / worker rendering.
 - libav.js pthreads (blocked on upstream bug).
-- HTTP reader LRU cache for seeks.
 
 ---
 

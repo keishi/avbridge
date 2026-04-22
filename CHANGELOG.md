@@ -4,6 +4,41 @@ All notable changes to **avbridge.js** are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.12.0]
+
+Network playback performance + seek-bar polish.
+
+### Added
+
+- **libav HTTP reader LRU block cache** — replaces the single-slot
+  cache with a bounded LRU keyed by fetched block position. Hot
+  regions (header/moov at the front, tail index, current read
+  position) all stay resident across seeks instead of evicting
+  each other on every bounce. Byte-budgeted (default 8 MB) so
+  memory stays predictable.
+- **`cacheBytes` option** on `CreatePlayerOptions` and
+  `TransportConfig`. Raise this for apps that play seek-heavy
+  legacy-container media over HTTP — e.g. 32 MB holds ~32 distinct
+  hot regions. Set to `0` to disable caching.
+- **Multi-range buffered rendering** in `<avbridge-player>`. The
+  seek bar now draws each buffered `TimeRange` as its own segment
+  with real gaps between them instead of collapsing to a single
+  bar from 0 to the last range's end. Matches MSE behavior after
+  seeks (where buffered typically has two disjoint ranges).
+
+### Fixed
+
+- **Touch scrub broken on Android** (Chrome, Samsung Internet,
+  Galaxy S23 Ultra). The seek bar lacked `touch-action: none`, so
+  the browser treated horizontal drags as scroll candidates and
+  cancelled `pointermove` after the first resolution. Now claimed
+  in CSS — drags stay with the player's pointer handler.
+- **Buffered indicator didn't refresh while paused.** Was only
+  updated on `timeupdate` (and gated by `_userSeeking`). Now also
+  listens on `progress` and updates independently of playback
+  state, so the indicator stays current during paused buffering
+  and while the user is scrubbing.
+
 ## [2.11.0]
 
 Subtitle panel, interaction fixes, and quality-of-life.

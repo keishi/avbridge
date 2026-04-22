@@ -32,8 +32,13 @@
  *   clamped to `[256 KB, 1 MB]`. Small reads get amortized; pathological
  *   large requests don't OOM us.
  *
- * - **Last-block cache.** Only the most-recent fetched block is kept.
- *   Re-fetches via Range are cheap; an LRU cache is post-1.0.
+ * - **LRU block cache.** Fetched blocks are kept in a Map keyed by start
+ *   position, bounded by a byte budget (default 8 MB, configurable via
+ *   `cacheBytes`). Map insertion order doubles as recency; re-accessing
+ *   a block promotes it via delete+set. Eviction walks oldest-first
+ *   until total bytes fit the budget. Typical seek pattern has three
+ *   hot regions — header/moov at the front, index at the tail, current
+ *   read position — all of which fit comfortably under the default.
  *
  * - **Safe detach.** `detach()` clears `libav.onblockread`, sets a
  *   destroyed flag, and ignores any in-flight fetch resolutions so we
@@ -42,6 +47,7 @@
 
 const MIN_READ = 256 * 1024;
 const MAX_READ = 1 * 1024 * 1024;
+const DEFAULT_CACHE_BYTES = 8 * 1024 * 1024;
 
 interface LibavLike {
   mkblockreaderdev(name: string, size: number): Promise<void>;
@@ -69,6 +75,12 @@ export interface AttachLibavHttpReaderOptions {
   requestInit?: RequestInit;
   /** Override fetch (for testing). Defaults to globalThis.fetch. */
   fetchFn?: typeof fetch;
+  /**
+   * Byte budget for the LRU block cache. Defaults to 8 MB. Set to `0`
+   * to disable caching. Raise this (e.g. 32 MB) for apps that play
+   * seek-heavy legacy-container media over the network.
+   */
+  cacheBytes?: number;
 }
 
 /**
@@ -108,6 +120,7 @@ export async function prepareLibavInput(
     const handle = await attachLibavHttpReader(libav, filename, source.url, {
       requestInit: transport?.requestInit,
       fetchFn: transport?.fetchFn,
+      cacheBytes: transport?.cacheBytes,
     });
     return {
       filename,
@@ -192,9 +205,12 @@ export async function attachLibavHttpReader(
   // ── State ───────────────────────────────────────────────────────────────
 
   let detached = false;
-  // Most-recently fetched block. Cached so re-reads of the same region
-  // (e.g. demuxer re-walks the header) don't issue another HTTP request.
-  let cached: { pos: number; bytes: Uint8Array } | null = null;
+  // LRU cache of fetched blocks, keyed by start position. Map insertion
+  // order = recency. Bounded by `cacheBudget` bytes; evicts oldest-first
+  // on overflow. Set budget to 0 to disable caching.
+  const cache = new Map<number, Uint8Array>();
+  let cacheBytes = 0;
+  const cacheBudget = Math.max(0, options.cacheBytes ?? DEFAULT_CACHE_BYTES);
   // The currently in-flight fetch, if any. Used both for serialization
   // (we await this before starting another) and for in-flight dedup.
   let inflight: Promise<void> | null = null;
@@ -206,17 +222,39 @@ export async function attachLibavHttpReader(
     return doubled;
   }
 
-  /** True if the cached block fully covers `[pos, pos+length)`. */
-  function cacheCovers(pos: number, length: number): boolean {
-    if (!cached) return false;
-    return pos >= cached.pos && pos + length <= cached.pos + cached.bytes.byteLength;
+  /**
+   * Look up a cached block that fully covers `[pos, pos+length)`. On hit,
+   * promote the block to most-recent and return the slice. On miss, null.
+   */
+  function cacheLookup(pos: number, length: number): Uint8Array | null {
+    for (const [blockPos, bytes] of cache) {
+      if (pos >= blockPos && pos + length <= blockPos + bytes.byteLength) {
+        cache.delete(blockPos);
+        cache.set(blockPos, bytes);
+        const offset = pos - blockPos;
+        return bytes.subarray(offset, offset + length);
+      }
+    }
+    return null;
   }
 
-  /** Slice the requested window out of the cached block. */
-  function sliceFromCache(pos: number, length: number): Uint8Array {
-    if (!cached) throw new Error("sliceFromCache called with no cache");
-    const offset = pos - cached.pos;
-    return cached.bytes.subarray(offset, offset + length);
+  /** Insert a fetched block; evict least-recently-used until under budget. */
+  function cacheInsert(pos: number, bytes: Uint8Array): void {
+    const existing = cache.get(pos);
+    if (existing) {
+      cacheBytes -= existing.byteLength;
+      cache.delete(pos);
+    }
+    cache.set(pos, bytes);
+    cacheBytes += bytes.byteLength;
+    while (cacheBytes > cacheBudget && cache.size > 0) {
+      const oldestKey = cache.keys().next().value as number | undefined;
+      if (oldestKey === undefined) break;
+      const oldest = cache.get(oldestKey);
+      if (!oldest) break;
+      cache.delete(oldestKey);
+      cacheBytes -= oldest.byteLength;
+    }
   }
 
   /** Fetch one Range and update the cache. */
@@ -235,7 +273,7 @@ export async function attachLibavHttpReader(
       );
     }
     const buf = new Uint8Array(await res.arrayBuffer());
-    cached = { pos, bytes: buf };
+    cacheInsert(pos, buf);
     return buf;
   }
 
@@ -252,9 +290,9 @@ export async function attachLibavHttpReader(
     if (detached) return;
 
     // Cache hit — reply directly without a network round-trip.
-    if (cacheCovers(pos, length)) {
-      const data = sliceFromCache(pos, length);
-      try { await libav.ff_block_reader_dev_send(name, pos, data); } catch { /* ignore — libav may have torn down */ }
+    const hit = cacheLookup(pos, length);
+    if (hit) {
+      try { await libav.ff_block_reader_dev_send(name, pos, hit); } catch { /* ignore — libav may have torn down */ }
       return;
     }
 
@@ -312,7 +350,8 @@ export async function attachLibavHttpReader(
         try { await inflight; } catch { /* ignore */ }
       }
       // Drop the cache and unlink the virtual file.
-      cached = null;
+      cache.clear();
+      cacheBytes = 0;
       try { await libav.unlinkreadaheadfile(filename); } catch { /* ignore */ }
     },
   };
