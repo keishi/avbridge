@@ -752,10 +752,13 @@ export class AvbridgePlayerElement extends HTMLElement {
 
   // ── Stats for nerds ────────────────────────────────────────────────────
 
+  private _statsPrev: { ts: number; rt: Record<string, unknown> } | null = null;
+
   private _toggleStats(): void {
     this._statsOpen = !this._statsOpen;
     this._statsEl.classList.toggle("open", this._statsOpen);
     if (this._statsOpen) {
+      this._statsPrev = null; // reset delta baseline
       this._updateStats();
       this._statsInterval = setInterval(() => this._updateStats(), 1000);
     } else {
@@ -767,23 +770,92 @@ export class AvbridgePlayerElement extends HTMLElement {
     const d = this._video.getDiagnostics() as Record<string, unknown> | null;
     if (!d) { this._statsEl.textContent = "No diagnostics"; return; }
     const rt = (d.runtime ?? {}) as Record<string, unknown>;
-    const lines: string[] = [
-      `Container: ${d.container ?? "?"}`,
-      `Video: ${d.videoCodec ?? "?"} ${d.width ?? "?"}×${d.height ?? "?"}`,
-      `Audio: ${d.audioCodec ?? "none"}`,
-      `Strategy: ${d.strategy ?? "?"}  Class: ${d.strategyClass ?? "?"}`,
-      `Transport: ${d.transport ?? "?"} Range: ${d.rangeSupported ?? "?"}`,
-      `Duration: ${typeof d.duration === "number" ? d.duration.toFixed(1) + "s" : "?"}`,
-    ];
-    if (rt.framesDecoded != null) lines.push(`Frames: ${rt.framesDecoded} decoded, ${rt.framesDropped ?? 0} dropped`);
-    if (rt.framesPainted != null) lines.push(`Painted: ${rt.framesPainted} Late: ${rt.framesDroppedLate ?? 0} Overflow: ${rt.framesDroppedOverflow ?? 0}`);
-    if (rt.videoFramesDecoded != null) lines.push(`Video decoded: ${rt.videoFramesDecoded} Chunks fed: ${rt.videoChunksFed ?? "?"}`);
-    if (rt.audioFramesDecoded != null) lines.push(`Audio decoded: ${rt.audioFramesDecoded}`);
-    if (rt.packetsRead != null) lines.push(`Packets read: ${rt.packetsRead}`);
-    if (rt.bsfApplied && (rt.bsfApplied as string[]).length > 0) lines.push(`BSF: ${(rt.bsfApplied as string[]).join(", ")}`);
-    if (rt.audioState != null) lines.push(`Audio state: ${rt.audioState} Clock: ${rt.clockMode ?? "?"}`);
+    const now = performance.now();
+    const prev = this._statsPrev;
+    const dtSec = prev ? Math.max(0.001, (now - prev.ts) / 1000) : 0;
+    const delta = (key: string): number | null => {
+      if (!prev) return null;
+      const a = rt[key];
+      const b = prev.rt[key];
+      if (typeof a === "number" && typeof b === "number") return a - b;
+      return null;
+    };
+    const rate = (key: string): number | null => {
+      const d_ = delta(key);
+      return d_ != null ? d_ / dtSec : null;
+    };
+    const fmt = (n: number | null, digits = 1) => (n == null ? "?" : n.toFixed(digits));
+
+    const sourceFps = (typeof rt.sourceFps === "number" ? rt.sourceFps : d.fps) as number | undefined;
+    const lines: string[] = [];
+
+    // ── Identity ──────────────────────────────────────────────────────
+    lines.push(`Container: ${d.container ?? "?"}   Strategy: ${d.strategy ?? "?"} (${d.strategyClass ?? "?"})`);
+    lines.push(`Video: ${d.videoCodec ?? "?"} ${d.width ?? "?"}×${d.height ?? "?"}${sourceFps ? ` @ ${sourceFps.toFixed(3)} fps` : ""}`);
+    lines.push(`Audio: ${d.audioCodec ?? "none"}   Transport: ${d.transport ?? "?"}${d.rangeSupported === true ? "/range" : ""}`);
+    lines.push(`Duration: ${typeof d.duration === "number" ? d.duration.toFixed(1) + "s" : "?"}   Playback rate: ${this._video.playbackRate.toFixed(2)}x`);
+
+    // ── Realtime rates (deltas per second) ─────────────────────────────
+    if (rt.videoFramesDecoded != null) {
+      const decFps = rate("videoFramesDecoded");
+      const paintFps = rate("framesPainted");
+      const dropLateFps = rate("framesDroppedLate");
+      const dropOverflowFps = rate("framesDroppedOverflow");
+      const pct = sourceFps && decFps != null ? ` (${((decFps / sourceFps) * 100).toFixed(0)}% of realtime)` : "";
+      lines.push(`Decode fps: ${fmt(decFps)}${pct}   Paint fps: ${fmt(paintFps)}`);
+      lines.push(`Drops/sec: late=${fmt(dropLateFps)} overflow=${fmt(dropOverflowFps)}   Totals: painted=${rt.framesPainted} dropped=${rt.framesDroppedLate}`);
+    }
+
+    // ── Decode-time breakdown (wall ms spent inside libav) ────────────
+    if (typeof rt.videoDecodeMsTotal === "number") {
+      const msDelta = delta("videoDecodeMsTotal");
+      const batchesDelta = delta("videoDecodeBatches");
+      const perBatch = msDelta != null && batchesDelta && batchesDelta > 0 ? msDelta / batchesDelta : null;
+      const share = msDelta != null && dtSec > 0 ? (msDelta / (dtSec * 1000)) * 100 : null;
+      lines.push(
+        `Video decode: ${fmt(perBatch)}ms/batch avg   ${fmt(share)}% of wall   slowest=${fmt(rt.slowestVideoBatchMs as number)}ms`,
+      );
+    }
+    if (typeof rt.audioDecodeMsTotal === "number") {
+      const msDelta = delta("audioDecodeMsTotal");
+      const share = msDelta != null && dtSec > 0 ? (msDelta / (dtSec * 1000)) * 100 : null;
+      lines.push(`Audio decode: ${fmt(share)}% of wall`);
+    }
+    if (typeof rt.pumpThrottleMsTotal === "number") {
+      const msDelta = delta("pumpThrottleMsTotal");
+      const share = msDelta != null && dtSec > 0 ? (msDelta / (dtSec * 1000)) * 100 : null;
+      lines.push(`Producer throttled: ${fmt(share)}% of wall`);
+    }
+
+    // ── Queue health ──────────────────────────────────────────────────
+    if (rt.queueDepth != null) {
+      lines.push(
+        `Queue: depth=${rt.queueDepth} span=${fmt(rt.queueSpanMs as number)}ms ` +
+        `head=${fmt(rt.queueHeadMs as number)}ms tail=${fmt(rt.queueTailMs as number)}ms`,
+      );
+    }
+    if (typeof rt.newestVideoPtsMs === "number") {
+      lines.push(`Newest decoded PTS: ${(rt.newestVideoPtsMs / 1000).toFixed(2)}s`);
+    }
+
+    // ── Audio ─────────────────────────────────────────────────────────
+    if (rt.audioState != null) {
+      lines.push(`Audio state: ${rt.audioState}   bufferAhead=${fmt(rt.bufferAhead as number, 2)}s   clock=${rt.clockMode ?? "?"}`);
+    }
+
+    // ── BSF + warnings ────────────────────────────────────────────────
+    if (typeof rt.ptsRegressions === "number" && rt.ptsRegressions > 0) {
+      lines.push(`PTS REGRESSIONS: ${rt.ptsRegressions} (worst=${fmt(rt.worstPtsRegressionMs as number)}ms) — decoder emitting out of order`);
+    }
+    if (rt.bsfApplied && (rt.bsfApplied as string[]).length > 0) lines.push(`BSF active: ${(rt.bsfApplied as string[]).join(", ")}`);
+    if (rt.bsfMissing && (rt.bsfMissing as string[]).length > 0) {
+      lines.push(`BSF MISSING: ${(rt.bsfMissing as string[]).join(", ")} (rebuild libav with avbsf)`);
+    }
+
     if (d.probedBy) lines.push(`Probed by: ${d.probedBy}`);
+
     this._statsEl.textContent = lines.join("\n");
+    this._statsPrev = { ts: now, rt: { ...rt } };
   }
 
   // ── Controls: fullscreen ───────────────────────────────────────────────

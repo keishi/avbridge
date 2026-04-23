@@ -323,3 +323,265 @@ This is how professional media players handle it too — audio is the
 master clock, video is periodically re-anchored to it, and the
 re-anchoring is invisible because it happens before drift becomes
 perceptible.
+
+---
+
+## 2026-04-23 — DivX/Xvid AVI stutter: `avbsf` fragment missing from libav build
+
+**Affected code:** `scripts/build-libav.sh`, `src/strategies/fallback/decoder.ts`, `src/strategies/hybrid/decoder.ts`
+**Ships in:** 2.12.1
+**Triage time:** ~30 min once the right log line was noticed
+
+### Symptom
+
+A perfectly ordinary AVI episode (MPEG-4 Part 2 / Xvid video + MP3
+audio, 624×352) played through the fallback strategy with ~41% of
+frames dropped as "late." User reported "stuttering" on local
+filesystem playback — ruling out network. Runtime stats:
+
+```
+framesPainted: 180, framesDroppedLate: 124
+```
+
+The renderer logs showed a diagnostic PTS pattern:
+
+```
+PAINT  rawDrift=119.3ms    (video ahead of audio by ~120ms, normal)
+WAIT   rawDrift=706.0ms    (video way ahead — "wait for audio")
+...
+PAINT  rawDrift=-3494.1ms  (video 3.5s BEHIND audio — backwards jump)
+PAINT  rawDrift=-4343.4ms  (4.3s BEHIND)
+```
+
+Individual frame PTS values jumping backwards by several seconds is
+not a drift problem — it's the decoder emitting frames in *bitstream
+order* instead of *display order*.
+
+### Initial hypotheses (and why each was wrong)
+
+1. **"Software decoder is just too slow for 624×352 MPEG-4."** No — at
+   that resolution libav WASM should manage realtime easily. And the
+   pattern of *backwards PTS jumps* isn't what "too slow" looks like
+   (too slow = monotonically late, not zig-zagging).
+
+2. **"A/V calibration is broken."** The calibration snapshot at
+   `calib=119.3ms` was correct for the actual audio/video relationship
+   at startup. The problem wasn't calibration — it was that *later*
+   frames arrived with PTS values calibration couldn't possibly
+   reconcile.
+
+### Root cause
+
+A single console line, previously dismissed as a warning:
+
+```
+[avbridge] failed to init mpeg4_unpack_bframes BSF:
+  e.av_bsf_list_parse_str_js is not a function
+```
+
+The `mpeg4_unpack_bframes` bitstream filter rewrites DivX/Xvid packets
+that contain two frames packed together (a reference frame immediately
+followed by a B-frame that displays *before* it). Without the filter,
+the decoder emits the B-frame *after* the reference frame is decoded,
+so PTS values come out non-monotonically — often with several-second
+backwards jumps.
+
+`scripts/build-libav.sh` listed `"bsf-mpeg4_unpack_bframes"` in the
+fragments, which correctly adds `--enable-bsf=mpeg4_unpack_bframes` to
+FFmpeg's configure (compiling the BSF C code into the WASM). But it
+did **not** include the `"avbsf"` fragment, which is what sets
+`-DLIBAVJS_WITH_BSF=1` and links the JS wrapper layer
+(`av_bsf_list_parse_str_js`, `av_bsf_init`, `av_bsf_send_packet`,
+`av_bsf_receive_packet`).
+
+Net result: the BSF was present in the binary but unreachable from JS.
+Every call from the fallback/hybrid decoder threw, was caught, and set
+`bsfCtx = null` — decoding proceeded without the filter. The feature
+had been "shipped" since 2.2.0 without ever actually running.
+
+Grepping the built `libav-6.8.8.0-avbridge.wasm.mjs` for `av_bsf*`
+returned zero matches — every `av_bsf_*` function the decoder expected
+was missing, not just the one that threw.
+
+### Fix
+
+Add `"avbsf"` to the fragment list in `scripts/build-libav.sh` and
+rebuild the variant. No code changes needed in the decoders — they
+were correct all along. Confirm the rebuild worked by grepping the
+output `.mjs` for `av_bsf_list_parse_str_js`; the webcodecs variant
+(which does include `avbsf`) is the reference for what "working"
+looks like.
+
+### Generalizable lesson
+
+**A BSF-style "fix" that's implemented in code but dead at runtime is
+worse than no fix at all.** The decoder path compiled, the feature
+shipped, the CHANGELOG claimed it worked. The only signal it was dead
+was a `console.warn` that looked like a recoverable startup hiccup.
+
+Three specific patterns to watch:
+
+1. **libav.js fragment pairs.** `bsf-X`, `filter-X`, `protocol-X` etc.
+   sometimes require a companion wrapper fragment (`avbsf`, `avfilter`,
+   `avformat`) to be reachable from JS. Including the C-code fragment
+   alone is a common footgun. **Grep the built `.mjs` for the
+   functions you plan to call** — if they're missing, the binding
+   layer wasn't linked.
+
+2. **"Warning once, works forever" bugs.** An init-time warning that's
+   then caught and turned into `feature = null` means the feature is
+   silently absent for the entire session. These deserve louder
+   treatment: a clear log line *at playback time*, not just at init
+   ("no BSF available — B-frame ordering may be wrong"), or a visible
+   status in diagnostics.
+
+3. **Backwards-jumping PTS is diagnostic of packet/frame-ordering bugs,
+   not clock drift.** When you see `nextPTS` go backwards by more than
+   a GOP length, stop looking at the A/V sync code and start looking
+   at whether frames are being emitted in the right order. Drift is
+   monotonic; packed-B-frame artifacts zig-zag.
+
+---
+
+## 2026-04-23 — Synthetic PTS counter ignores valid neighbors → 40% drop rate on AVIs
+
+**Affected code:** `src/strategies/fallback/decoder.ts`
+**Ships in:** 2.12.1
+**Triage time:** ~2 hours (most of it spent chasing the wrong hypotheses)
+
+### Symptom
+
+A perfectly healthy 25 fps MPEG-4 Part 2 (Xvid) AVI played back with
+~40% of frames dropped as "late" and visibly choppy playback despite
+the decoder keeping up with real time. Not a small-scale jitter —
+large, several-second PAINT events with `nextPTS` values up to
+**six seconds behind the audio clock**, interleaved with normal-looking
+paints. User experience: the video looked like it was stuttering and
+occasionally rewinding.
+
+The smoking-gun log line:
+
+```
+PAINT q=15  calibAudio=2096ms  nextPTS=1960ms  rawDrift=-16.7ms  dropped=17
+PAINT q=27  calibAudio=21429ms nextPTS=15400ms rawDrift=-5736ms  dropped=5
+```
+
+Each of those is the renderer painting a frame whose PTS is seconds
+*behind* the audio clock, and dropping handfuls of even-staler frames
+ahead of it.
+
+### Initial hypotheses (and why each was wrong)
+
+1. **"The `mpeg4_unpack_bframes` BSF isn't working."** We found
+   earlier that the BSF wrapper functions were missing from the libav
+   variant; rebuilt with the `avbsf` fragment. BSF went active. The
+   *backwards-by-GOP-length* zig-zag pattern disappeared, but the
+   large-scale "paint 5 seconds behind audio" pattern stayed.
+   Instructive: fixing one real bug revealed that the dominant
+   symptom was something else entirely.
+
+2. **"The FPS probe is wrong."** It was — codecpar framerate wasn't
+   being read, so the renderer defaulted to 30 fps instead of 25.
+   Fixed. Drop rate unchanged.
+
+3. **"The drop policy is too aggressive."** Added a diagnostic
+   `AVBRIDGE_RELAX_DROP` flag that pushes the late-drop threshold out
+   to 60 seconds, effectively disabling drops. User reported: no
+   visible change. That ruled out the drop *policy* — the frames
+   being *painted* were themselves wrong.
+
+4. **"Decoder can't sustain real time."** Instrumented decode
+   throughput. Result: 4.8 ms per batch average, slowest batch
+   15.6 ms, decoder idle 95 % of the time in the pump throttle.
+   Decoder was fast and bored, not starving.
+
+### Root cause
+
+The fallback decoder's `sanitizeFrameTimestamp` callback for invalid
+PTSs (`AV_NOPTS_VALUE` output from libav) used a plain counter:
+
+```ts
+sanitizeFrameTimestamp(f, () => {
+  const ts = syntheticVideoUs;
+  syntheticVideoUs += videoFrameStepUs;
+  return ts;
+}, videoTimeBase);
+```
+
+`syntheticVideoUs` was initialized to `0` at bootstrap (or to the
+seek-target on seek) and **only advanced when an invalid-PTS frame
+appeared**. It did not track the surrounding valid frames.
+
+For a stream where *every* frame has an invalid PTS, this works:
+`0, 40, 80, 120 ms…` — synthetic timeline matches real time.
+
+For a stream where *most* frames are valid and *some* are invalid
+— which is exactly what libav emits for MPEG-4 Part 2 (occasionally
+the decoder has no DTS/PTS info for a frame, especially around B-frame
+reordering boundaries) — the counter lags far behind the valid
+neighbors. At minute 5 of playback, a single invalid-PTS frame would
+be tagged with a PTS near the *start* of the stream (wherever the
+counter happened to be).
+
+Those mis-stamped frames then sat in the renderer queue with
+wildly-wrong timestamps. The PTS-based paint logic in the renderer
+is built on the assumption that `queue[i].timestamp` is monotonic
+in `i` — one lookup `bestIdx` loop walks forward and `break`s on
+the first out-of-window frame. With a few back-in-time frames
+scattered through the queue, the loop's behavior became undefined:
+sometimes it'd paint a five-second-stale frame, sometimes it'd
+drop a dozen healthy ones around a poisoned anchor.
+
+### Fix
+
+Anchor synthetic timestamps to the most recently emitted frame's PTS
+plus one frame step, instead of a free-running counter:
+
+```ts
+sanitizeFrameTimestamp(f, () => {
+  const base = lastEmittedPtsUs >= 0
+    ? lastEmittedPtsUs + videoFrameStepUs
+    : syntheticVideoUs;
+  syntheticVideoUs = base + videoFrameStepUs;
+  return base;
+}, videoTimeBase);
+```
+
+Invalid-PTS frames now interpolate between their valid neighbors and
+stay monotonic. Reset `lastEmittedPtsUs = -1` on seek so the anchor
+doesn't carry across discontinuities.
+
+Verification on the same AVI: drop rate went from **331 / 747 (44 %)
+to 0 / 298 (0 %)**. Paint rate went from **14–16 fps to 24.8 fps**
+(source rate, within rounding). `ptsRegressions` counter added by the
+same investigation reports `0` across the full playback.
+
+### Generalizable lessons
+
+1. **Fallback paths that aren't tracked against ground truth silently
+   drift.** The synthetic-timestamp counter had no relationship to the
+   valid PTS stream around it. A rule of thumb: any value that's used
+   in place of missing real data should be *derived* from the most
+   recent real value, never from a private counter that forgot what
+   the real data looks like.
+
+2. **"Paints a frame from seconds ago" is a timestamp-corruption
+   signature, not a sync bug.** A/V sync issues bound drift to tens or
+   hundreds of milliseconds. When you see paints that are *seconds*
+   behind the audio clock and not correlated with a seek, suspect the
+   timestamp pipeline — not the renderer or the clock.
+
+3. **Instrumentation first, hypotheses second.** Four serial hypotheses
+   (BSF, fps, drop policy, decoder speed) all *looked* plausible given
+   the symptom. The one that was actually true would have been
+   impossible to guess; only the `PAINT ... nextPTS=15400` line with
+   the regression counter and decode-throughput numbers made it
+   visible. When a bug reproduces reliably, the ratio of debugging
+   time to instrumentation time should favor instrumentation
+   heavily — the hypothesis space is too big to guess through.
+
+4. **Prior bugs can mask downstream bugs.** While the BSF was broken
+   (emitting frames out of order), the symptom of the synthetic-PTS
+   bug was drowned in the BSF's own chaos. Fixing the BSF made the
+   synthetic-PTS bug visible. Expect this pattern — when one real fix
+   doesn't resolve a symptom, it often just uncovered the next layer.

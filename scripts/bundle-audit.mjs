@@ -101,7 +101,15 @@ const SCENARIOS = [
     // decode-stall supervisor (silent-video watchdog), which added
     // evaluateDecodeHealth / readDecodedFrameCount plus a fallbackChain on
     // REMUX_CANDIDATE in classify. Net gzip cost ~400 B.
-    maxEagerGzip: 23_000,
+    // v2.12.0 raised the limit from 23_000 → 23_500 to accommodate the
+    // Stats-for-Nerds overhaul (per-second decode/paint/drop rates, decode-
+    // ms breakdown, queue span, PTS-regression + BSF-missing visibility)
+    // and the matching decoder throughput instrumentation
+    // (videoDecodeMsTotal/Batches, pumpThrottleMs, slowestVideoBatchMs).
+    // These surfaced the synthetic-PTS stutter and post-seek out-of-order
+    // bugs that v2.12.0 fixed — the panel paid for itself during that
+    // investigation. Net gzip cost ~1 KB.
+    maxEagerGzip: 24_000,
     requireInEntry: ["customElements"],
   },
 ];

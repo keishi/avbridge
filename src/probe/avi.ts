@@ -77,7 +77,7 @@ export async function probeWithLibav(
         codec: ffmpegToAvbridgeVideo(codecName),
         width: codecpar?.width ?? 0,
         height: codecpar?.height ?? 0,
-        fps: framerate(stream),
+        fps: await framerate(libav, stream),
       });
     } else if (stream.codec_type === libav.AVMEDIA_TYPE_AUDIO) {
       audioTracks.push({
@@ -111,13 +111,42 @@ export async function probeWithLibav(
   };
 }
 
-function framerate(stream: LibavStream): number | undefined {
+/**
+ * Read frame rate from the stream's `AVCodecParameters.framerate`.
+ *
+ * `avg_frame_rate` / `r_frame_rate` live on the AVStream in C but libav.js
+ * doesn't expose them as JS properties on the stream record — only via
+ * dedicated accessor functions we don't ship. `codecpar.framerate` IS
+ * accessible via `AVCodecParameters_framerate_num/_den` and is populated
+ * for most containers (for AVI it's parsed from `dwRate`/`dwScale` in the
+ * stream header).
+ *
+ * Returns undefined if unavailable so the caller can fall back to a
+ * container-appropriate default (currently 30 fps, which is wrong for
+ * 25 fps PAL and 23.976 fps film content — hence the importance of
+ * reading this correctly).
+ */
+async function framerate(
+  libav: LibavInstance,
+  stream: LibavStream,
+): Promise<number | undefined> {
+  // The stream record may still carry these (new libav.js versions) —
+  // prefer them when present.
   if (typeof stream.avg_frame_rate_num === "number" && stream.avg_frame_rate_den) {
     return stream.avg_frame_rate_num / stream.avg_frame_rate_den;
   }
   if (stream.avg_frame_rate && typeof stream.avg_frame_rate === "object") {
     if (stream.avg_frame_rate.den === 0) return undefined;
     return stream.avg_frame_rate.num / stream.avg_frame_rate.den;
+  }
+  try {
+    const num = await libav.AVCodecParameters_framerate_num?.(stream.codecpar);
+    const den = await libav.AVCodecParameters_framerate_den?.(stream.codecpar);
+    if (typeof num === "number" && typeof den === "number" && den > 0 && num > 0) {
+      return num / den;
+    }
+  } catch {
+    // Fall through.
   }
   return undefined;
 }
@@ -249,6 +278,9 @@ interface LibavInstance {
   AVFormatContext_duration?(ctx: number): Promise<number>;
   AVFormatContext_durationhi?(ctx: number): Promise<number>;
   i64tof64?(lo: number, hi: number): number;
+
+  AVCodecParameters_framerate_num?(codecpar: number): Promise<number>;
+  AVCodecParameters_framerate_den?(codecpar: number): Promise<number>;
 
   AVMEDIA_TYPE_VIDEO: number;
   AVMEDIA_TYPE_AUDIO: number;

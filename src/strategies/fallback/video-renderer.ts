@@ -141,10 +141,21 @@ export class VideoRenderer {
     this.rafHandle = requestAnimationFrame(this.tick);
   }
 
-  /** True once at least one frame has been enqueued. */
+  /**
+   * True once at least one frame has been enqueued *since the last flush*.
+   * Used by `readyState` — initial cold-start reports HAVE_NOTHING until
+   * any frame has arrived, and after a seek we want the same semantics
+   * (HAVE_NOTHING until post-seek frames arrive), so the cumulative
+   * `framesPainted > 0` that used to live here was wrong: it kept the
+   * state "true forever" after the first frame ever, so post-seek
+   * `waitForBuffer()` would exit immediately with an empty queue and
+   * leave video frozen while audio kept going.
+   */
   hasFrames(): boolean {
-    return this.queue.length > 0 || this.framesPainted > 0;
+    return this.queue.length > 0 || this.hasEverEnqueuedSinceFlush;
   }
+
+  private hasEverEnqueuedSinceFlush = false;
 
   /** Current depth of the frame queue. Used by the decoder for backpressure. */
   queueDepth(): number {
@@ -166,6 +177,7 @@ export class VideoRenderer {
       return;
     }
     this.queue.push(frame);
+    this.hasEverEnqueuedSinceFlush = true;
     if (this.queue.length === 1 && this.framesPainted === 0) {
       this.resolveFirstFrame();
     }
@@ -342,7 +354,16 @@ export class VideoRenderer {
       }
 
       // Only drop frames that are more than 2 frame-durations behind.
-      const dropThresholdUs = audioNowUs - frameDurationUs * 2;
+      // Diagnostic escape hatch: `globalThis.AVBRIDGE_RELAX_DROP = true`
+      // pushes the threshold so far back that frames are effectively
+      // never dropped as late. The display will run behind the audio
+      // clock but won't stutter from drop bursts. Useful for isolating
+      // "is the problem decode throughput or drop policy?".
+      const _relaxDrop =
+        (globalThis as { AVBRIDGE_RELAX_DROP?: boolean }).AVBRIDGE_RELAX_DROP === true;
+      const dropThresholdUs = _relaxDrop
+        ? audioNowUs - 60 * 1_000_000 /* 60 s */
+        : audioNowUs - frameDurationUs * 2;
       let dropped = 0;
       while (bestIdx > 0) {
         const ts = this.queue[0].timestamp ?? 0;
@@ -419,6 +440,7 @@ export class VideoRenderer {
     while (this.queue.length > 0) this.queue.shift()?.close();
     this.prerolled = false;
     this.ptsCalibrated = false; // recalibrate at new seek position
+    this.hasEverEnqueuedSinceFlush = false; // so waitForBuffer() waits for post-flush frames
     if (isDebug() && count > 0) {
       // eslint-disable-next-line no-console
       console.log(`[avbridge:renderer] FLUSH discarded=${count} painted=${this.framesPainted} drops=${this.framesDroppedLate}`);
@@ -426,11 +448,27 @@ export class VideoRenderer {
   }
 
   stats(): Record<string, unknown> {
+    // Queue span — the gap between the oldest and newest queued frame's
+    // PTS, in ms. If this collapses while audio keeps advancing, the
+    // producer has stalled. If it stays wide with stale head, the
+    // producer is bursting faster than realtime but the renderer can't
+    // catch up.
+    let queueSpanMs = 0;
+    let queueHeadMs = 0;
+    let queueTailMs = 0;
+    if (this.queue.length > 0) {
+      queueHeadMs = Math.round((this.queue[0].timestamp ?? 0) / 1000);
+      queueTailMs = Math.round((this.queue[this.queue.length - 1].timestamp ?? 0) / 1000);
+      queueSpanMs = Math.max(0, queueTailMs - queueHeadMs);
+    }
     return {
       framesPainted: this.framesPainted,
       framesDroppedLate: this.framesDroppedLate,
       framesDroppedOverflow: this.framesDroppedOverflow,
       queueDepth: this.queue.length,
+      queueHeadMs,
+      queueTailMs,
+      queueSpanMs,
     };
   }
 

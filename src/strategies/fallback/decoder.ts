@@ -169,6 +169,7 @@ export async function startDecoder(opts: StartDecoderOptions): Promise<DecoderHa
   // garbled frame ordering.
   let bsfCtx: number | null = null;
   let bsfPkt: number | null = null;
+  let bsfRequiredButMissing = false;
   if (videoStream && opts.context.videoTracks[0]?.codec === "mpeg4") {
     try {
       bsfCtx = await libav.av_bsf_list_parse_str_js("mpeg4_unpack_bframes");
@@ -179,15 +180,24 @@ export async function startDecoder(opts: StartDecoderOptions): Promise<DecoderHa
         bsfPkt = await libav.av_packet_alloc();
         dbg.info("bsf", "mpeg4_unpack_bframes BSF active");
       } else {
-        // eslint-disable-next-line no-console
-        console.warn("[avbridge] mpeg4_unpack_bframes BSF not available — decoding without it");
+        bsfRequiredButMissing = true;
         bsfCtx = null;
       }
     } catch (err) {
-      // eslint-disable-next-line no-console
-      console.warn("[avbridge] failed to init mpeg4_unpack_bframes BSF:", (err as Error).message);
+      bsfRequiredButMissing = true;
       bsfCtx = null;
       bsfPkt = null;
+      dbg.warn("bsf", `mpeg4_unpack_bframes BSF init failed: ${(err as Error).message}`);
+    }
+    if (bsfRequiredButMissing) {
+      // eslint-disable-next-line no-console
+      console.error(
+        "[avbridge] MPEG-4 Part 2 (DivX/Xvid) detected but mpeg4_unpack_bframes " +
+        "BSF is unavailable in this libav variant. Files with packed B-frames " +
+        "will play with incorrect frame ordering (backwards PTS jumps, heavy " +
+        "late-drop stuttering). Rebuild the libav variant with the `avbsf` " +
+        "fragment included. See docs/dev/POSTMORTEMS.md for details.",
+      );
     }
   }
 
@@ -199,7 +209,12 @@ export async function startDecoder(opts: StartDecoderOptions): Promise<DecoderHa
       await libav.ff_copyin_packet(bsfPkt, pkt);
       const sendErr = await libav.av_bsf_send_packet(bsfCtx, bsfPkt);
       if (sendErr < 0) {
-        out.push(pkt); // BSF rejected — pass through original
+        // BSF rejected — DON'T pass the original through. `ff_copyin_packet`
+        // above may have transferred pkt.data's ArrayBuffer into the worker,
+        // in which case re-posting the same packet to the decoder fails
+        // with DataCloneError on a detached buffer. Skipping the packet is
+        // safer; the decoder's error recovery will resync at the next
+        // keyframe if this was transient.
         continue;
       }
       while (true) {
@@ -215,10 +230,23 @@ export async function startDecoder(opts: StartDecoderOptions): Promise<DecoderHa
   async function flushBSF(): Promise<void> {
     if (!bsfCtx || !bsfPkt) return;
     try {
-      await libav.av_bsf_send_packet(bsfCtx, 0);
-      while (true) {
-        const err = await libav.av_bsf_receive_packet(bsfCtx, bsfPkt);
-        if (err < 0) break;
+      // `av_bsf_flush` resets the BSF state without putting it in EOF
+      // mode. The old approach — sending a NULL packet — is the EOF
+      // signal; after that every subsequent `av_bsf_send_packet` fails,
+      // which made `applyBSF` fall back to pushing the ORIGINAL packet
+      // through (with its buffer already transferred to WASM by
+      // `ff_copyin_packet`). That detached buffer then failed to
+      // `postMessage` into the decoder worker with DataCloneError on
+      // the first post-seek batch.
+      if (libav.av_bsf_flush) {
+        await libav.av_bsf_flush(bsfCtx);
+      } else {
+        // Fallback for older libav.js variants without av_bsf_flush:
+        // drain any internal packets but DON'T send NULL-EOF.
+        while (true) {
+          const err = await libav.av_bsf_receive_packet(bsfCtx, bsfPkt);
+          if (err < 0) break;
+        }
       }
     } catch { /* ignore flush errors */ }
   }
@@ -251,6 +279,25 @@ export async function startDecoder(opts: StartDecoderOptions): Promise<DecoderHa
   let syntheticVideoUs = 0;
   let syntheticAudioUs = 0;
 
+  // Throughput instrumentation — answers "is the decoder keeping up?".
+  // All counters are cumulative since bootstrap (not reset on seek), so
+  // the stats panel can compute rolling deltas. Times are wall-ms spent
+  // inside the respective libav call; JS↔WASM boundary is inside the
+  // worker so this is the real cost the producer pays per batch.
+  let videoDecodeMsTotal = 0;
+  let audioDecodeMsTotal = 0;
+  let videoDecodeBatches = 0;
+  let audioDecodeBatches = 0;
+  let readMsTotal = 0;
+  let readBatches = 0;
+  let pumpThrottleMsTotal = 0;
+  let pumpThrottleEntries = 0;
+  let slowestVideoBatchMs = 0;
+  let newestVideoPtsUs = 0; // set by decodeVideoBatch after each emitted frame
+  let lastEmittedPtsUs = -1; // previous emitted frame's pts, for monotonicity check
+  let ptsRegressions = 0;
+  let worstPtsRegressionMs = 0;
+
   const videoTrackInfo = opts.context.videoTracks.find((t) => t.id === videoStream?.index);
   const videoFps = videoTrackInfo?.fps && videoTrackInfo.fps > 0 ? videoTrackInfo.fps : 30;
   const videoFrameStepUs = Math.max(1, Math.round(1_000_000 / videoFps));
@@ -274,9 +321,12 @@ export async function startDecoder(opts: StartDecoderOptions): Promise<DecoderHa
         // typical bitrates, so the worst-case queue spike stays under
         // `queueHighWater` and the throttle has a chance to apply
         // backpressure *between* batches rather than within one.
+        const _readStart = performance.now();
         [readErr, packets] = await libav.ff_read_frame_multi(fmt_ctx, readPkt, {
           limit: 16 * 1024,
         });
+        readMsTotal += performance.now() - _readStart;
+        readBatches++;
       } catch (err) {
         console.error("[avbridge] ff_read_frame_multi failed:", err);
         return;
@@ -388,13 +438,22 @@ export async function startDecoder(opts: StartDecoderOptions): Promise<DecoderHa
       //   - Renderer queue depth >= queueHighWater — the canvas can't
       //     drain fast enough. Without this, fast software decode of
       //     small frames piles up in the renderer and overflows.
-      while (
-        !destroyed &&
-        myToken === pumpToken &&
-        (opts.audio.bufferAhead() > 2.0 ||
-          opts.renderer.queueDepth() >= opts.renderer.queueHighWater)
-      ) {
-        await new Promise((r) => setTimeout(r, 50));
+      {
+        const _throttleStart = performance.now();
+        let _throttled = false;
+        while (
+          !destroyed &&
+          myToken === pumpToken &&
+          (opts.audio.bufferAhead() > 2.0 ||
+            opts.renderer.queueDepth() >= opts.renderer.queueHighWater)
+        ) {
+          _throttled = true;
+          await new Promise((r) => setTimeout(r, 50));
+        }
+        if (_throttled) {
+          pumpThrottleMsTotal += performance.now() - _throttleStart;
+          pumpThrottleEntries++;
+        }
       }
 
       if (readErr === libav.AVERROR_EOF) {
@@ -412,6 +471,7 @@ export async function startDecoder(opts: StartDecoderOptions): Promise<DecoderHa
   async function decodeVideoBatch(pkts: LibavPacket[], myToken: number, flush = false) {
     if (!videoDec || destroyed || myToken !== pumpToken) return;
     let frames: LibavFrame[];
+    const _t0 = performance.now();
     try {
       frames = await libav.ff_decode_multi(
         videoDec.c,
@@ -424,6 +484,12 @@ export async function startDecoder(opts: StartDecoderOptions): Promise<DecoderHa
       console.error("[avbridge] video decode batch failed:", err);
       return;
     }
+    {
+      const _dt = performance.now() - _t0;
+      videoDecodeMsTotal += _dt;
+      videoDecodeBatches++;
+      if (_dt > slowestVideoBatchMs) slowestVideoBatchMs = _dt;
+    }
     if (myToken !== pumpToken || destroyed) return;
 
     for (const f of frames) {
@@ -431,14 +497,54 @@ export async function startDecoder(opts: StartDecoderOptions): Promise<DecoderHa
       sanitizeFrameTimestamp(
         f,
         () => {
-          const ts = syntheticVideoUs;
-          syntheticVideoUs += videoFrameStepUs;
-          return ts;
+          // Anchor the synthetic timestamp to the last emitted frame's
+          // pts + one frame step. A plain counter (the old behavior)
+          // started at 0 and only advanced on invalid frames, which
+          // made the occasional AV_NOPTS_VALUE output get assigned a
+          // timestamp near the stream start — causing the renderer to
+          // paint backwards and drop healthy frames around it. Anchoring
+          // to `lastEmittedPtsUs` keeps invalid frames monotonic with
+          // their valid neighbors.
+          const base =
+            lastEmittedPtsUs >= 0
+              ? lastEmittedPtsUs + videoFrameStepUs
+              : syntheticVideoUs;
+          syntheticVideoUs = base + videoFrameStepUs;
+          return base;
         },
         videoTimeBase,
       );
       // sanitizeFrameTimestamp normalizes pts to µs, so the bridge can
       // always use the 1/1e6 timebase.
+      const _fPts = (f.ptshi ?? 0) * 0x100000000 + (f.pts ?? 0);
+      if (_fPts > newestVideoPtsUs) newestVideoPtsUs = _fPts;
+      if (lastEmittedPtsUs >= 0 && _fPts < lastEmittedPtsUs) {
+        // Decoder emitted a frame with lower PTS than the previous
+        // output. Dropping out-of-order frames here is the right move:
+        // the renderer's paint loop assumes monotonic queue order and
+        // breaks (stale frame stuck at head, newer frames drop as late,
+        // paint cadence collapses) if we let them through. Two scenarios
+        // produce this in practice:
+        //   - Post-seek tail of a B-frame reorder buffer that survives
+        //     avcodec_flush_buffers + av_bsf_flush (rare but observed
+        //     on mpeg4 after large seeks).
+        //   - A BSF that doesn't repair packed B-frames perfectly and
+        //     lets a DTS/PTS swap through.
+        // The decoder will catch up at the next I-frame.
+        ptsRegressions++;
+        const regressMs = (lastEmittedPtsUs - _fPts) / 1000;
+        if (regressMs > worstPtsRegressionMs) worstPtsRegressionMs = regressMs;
+        if (ptsRegressions <= 10) {
+          // eslint-disable-next-line no-console
+          console.warn(
+            `[avbridge:decoder] dropped out-of-order frame #${ptsRegressions}: ` +
+            `pts=${(_fPts / 1000).toFixed(1)}ms < previous=${(lastEmittedPtsUs / 1000).toFixed(1)}ms ` +
+            `(regression=${regressMs.toFixed(1)}ms). Typically a post-seek B-frame reorder tail.`,
+          );
+        }
+        continue; // skip enqueue
+      }
+      lastEmittedPtsUs = _fPts;
       try {
         const vf = bridge.laFrameToVideoFrame(f, { timeBase: [1, 1_000_000] });
         opts.renderer.enqueue(vf);
@@ -454,6 +560,7 @@ export async function startDecoder(opts: StartDecoderOptions): Promise<DecoderHa
   async function decodeAudioBatch(pkts: LibavPacket[], myToken: number, flush = false) {
     if (!audioDec || destroyed || myToken !== pumpToken) return;
     let frames: LibavFrame[];
+    const _t0 = performance.now();
     try {
       frames = await libav.ff_decode_multi(
         audioDec.c,
@@ -466,6 +573,8 @@ export async function startDecoder(opts: StartDecoderOptions): Promise<DecoderHa
       console.error("[avbridge] audio decode batch failed:", err);
       return;
     }
+    audioDecodeMsTotal += performance.now() - _t0;
+    audioDecodeBatches++;
     if (myToken !== pumpToken || destroyed) return;
 
     for (const f of frames) {
@@ -575,6 +684,7 @@ export async function startDecoder(opts: StartDecoderOptions): Promise<DecoderHa
 
       syntheticVideoUs = Math.round(timeSec * 1_000_000);
       syntheticAudioUs = Math.round(timeSec * 1_000_000);
+      lastEmittedPtsUs = -1;
 
       pumpRunning = pumpLoop(newToken).catch((err) =>
         console.error("[avbridge] fallback pump failed (post-setAudioTrack):", err),
@@ -633,6 +743,7 @@ export async function startDecoder(opts: StartDecoderOptions): Promise<DecoderHa
       // decoded frames start at the right media time.
       syntheticVideoUs = Math.round(timeSec * 1_000_000);
       syntheticAudioUs = Math.round(timeSec * 1_000_000);
+      lastEmittedPtsUs = -1;
 
       // The renderer & audio output are reset by the fallback session
       // wrapper that called us — see strategies/fallback/index.ts.
@@ -653,7 +764,24 @@ export async function startDecoder(opts: StartDecoderOptions): Promise<DecoderHa
         packetsRead,
         videoFramesDecoded,
         audioFramesDecoded,
+        // Throughput instrumentation — the stats panel turns these into
+        // "decode fps actual / realtime target" and shows slowest batch
+        // + producer throttle share.
+        videoDecodeMsTotal,
+        videoDecodeBatches,
+        audioDecodeMsTotal,
+        audioDecodeBatches,
+        readMsTotal,
+        readBatches,
+        pumpThrottleMsTotal,
+        pumpThrottleEntries,
+        slowestVideoBatchMs,
+        newestVideoPtsMs: Math.round(newestVideoPtsUs / 1000),
+        ptsRegressions,
+        worstPtsRegressionMs,
+        sourceFps: videoFps,
         bsfApplied: bsfCtx ? ["mpeg4_unpack_bframes"] : [],
+        bsfMissing: bsfRequiredButMissing ? ["mpeg4_unpack_bframes"] : [],
         // Confirmed transport info: once prepareLibavInput returns
         // successfully, we *know* whether the source is http-range (probe
         // succeeded and returned 206) or in-memory blob. Diagnostics hoists
@@ -776,6 +904,7 @@ interface LibavRuntime {
   av_bsf_init(ctx: number): Promise<number>;
   av_bsf_send_packet(ctx: number, pkt: number): Promise<number>;
   av_bsf_receive_packet(ctx: number, pkt: number): Promise<number>;
+  av_bsf_flush?(ctx: number): Promise<void>;
   av_bsf_free(ctx: number): Promise<void>;
 
   // Packet copy helpers — bridge JS packet objects to/from C-level pointers

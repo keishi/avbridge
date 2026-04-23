@@ -165,6 +165,7 @@ export async function startHybridDecoder(opts: StartHybridDecoderOptions): Promi
   // ── Bitstream filter for MPEG-4 Part 2 packed B-frames ───────────────
   let bsfCtx: number | null = null;
   let bsfPkt: number | null = null;
+  let bsfRequiredButMissing = false;
   if (videoStream && opts.context.videoTracks[0]?.codec === "mpeg4") {
     try {
       bsfCtx = await libav.av_bsf_list_parse_str_js("mpeg4_unpack_bframes");
@@ -175,15 +176,23 @@ export async function startHybridDecoder(opts: StartHybridDecoderOptions): Promi
         bsfPkt = await libav.av_packet_alloc();
         dbg.info("bsf", "mpeg4_unpack_bframes BSF active (hybrid)");
       } else {
-        // eslint-disable-next-line no-console
-        console.warn("[avbridge] mpeg4_unpack_bframes BSF not available in hybrid decoder");
+        bsfRequiredButMissing = true;
         bsfCtx = null;
       }
     } catch (err) {
-      // eslint-disable-next-line no-console
-      console.warn("[avbridge] hybrid: failed to init BSF:", (err as Error).message);
+      bsfRequiredButMissing = true;
       bsfCtx = null;
       bsfPkt = null;
+      dbg.warn("bsf", `hybrid: mpeg4_unpack_bframes BSF init failed: ${(err as Error).message}`);
+    }
+    if (bsfRequiredButMissing) {
+      // eslint-disable-next-line no-console
+      console.error(
+        "[avbridge] MPEG-4 Part 2 (DivX/Xvid) detected but mpeg4_unpack_bframes " +
+        "BSF is unavailable in this libav variant. Files with packed B-frames " +
+        "will play with incorrect frame ordering. Rebuild the libav variant " +
+        "with the `avbsf` fragment included.",
+      );
     }
   }
 
@@ -193,7 +202,13 @@ export async function startHybridDecoder(opts: StartHybridDecoderOptions): Promi
     for (const pkt of packets) {
       await libav.ff_copyin_packet(bsfPkt, pkt);
       const sendErr = await libav.av_bsf_send_packet(bsfCtx, bsfPkt);
-      if (sendErr < 0) { out.push(pkt); continue; }
+      if (sendErr < 0) {
+        // BSF rejected — DON'T pass the original through. Its buffer may
+        // have been transferred into the worker by ff_copyin_packet, so
+        // re-posting it would throw DataCloneError on a detached
+        // ArrayBuffer. See fallback/decoder.ts for the full explanation.
+        continue;
+      }
       while (true) {
         const recvErr = await libav.av_bsf_receive_packet(bsfCtx, bsfPkt);
         if (recvErr < 0) break;
@@ -206,10 +221,18 @@ export async function startHybridDecoder(opts: StartHybridDecoderOptions): Promi
   async function flushBSF(): Promise<void> {
     if (!bsfCtx || !bsfPkt) return;
     try {
-      await libav.av_bsf_send_packet(bsfCtx, 0);
-      while (true) {
-        const err = await libav.av_bsf_receive_packet(bsfCtx, bsfPkt);
-        if (err < 0) break;
+      // Use av_bsf_flush to reset the BSF without putting it in EOF mode.
+      // See the matching comment in src/strategies/fallback/decoder.ts —
+      // sending NULL as the flush signal puts the BSF into EOF state so
+      // subsequent sends fail, which corrupts the post-seek pipeline with
+      // detached-buffer DataCloneErrors.
+      if (libav.av_bsf_flush) {
+        await libav.av_bsf_flush(bsfCtx);
+      } else {
+        while (true) {
+          const err = await libav.av_bsf_receive_packet(bsfCtx, bsfPkt);
+          if (err < 0) break;
+        }
       }
     } catch { /* ignore */ }
   }
@@ -562,6 +585,7 @@ export async function startHybridDecoder(opts: StartHybridDecoderOptions): Promi
         videoChunksFed,
         audioFramesDecoded,
         bsfApplied: bsfCtx ? ["mpeg4_unpack_bframes"] : [],
+        bsfMissing: bsfRequiredButMissing ? ["mpeg4_unpack_bframes"] : [],
         videoDecodeQueueSize: videoDecoder?.decodeQueueSize ?? 0,
         // Confirmed transport info — see fallback decoder for the pattern.
         _transport: inputHandle.transport === "http-range" ? "http-range" : "memory",
@@ -687,6 +711,7 @@ interface LibavRuntime {
   av_bsf_init(ctx: number): Promise<number>;
   av_bsf_send_packet(ctx: number, pkt: number): Promise<number>;
   av_bsf_receive_packet(ctx: number, pkt: number): Promise<number>;
+  av_bsf_flush?(ctx: number): Promise<void>;
   av_bsf_free(ctx: number): Promise<void>;
   ff_copyin_packet(pktPtr: number, packet: LibavPacket): Promise<void>;
   ff_copyout_packet(pkt: number): Promise<LibavPacket>;

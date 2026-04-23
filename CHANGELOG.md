@@ -4,6 +4,82 @@ All notable changes to **avbridge.js** are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.12.1]
+
+DivX/Xvid AVI playback reliability — four latent bugs fixed. Content
+that had been stuttering and freezing for months now plays smoothly
+and seeks cleanly.
+
+### Added
+
+- **Stats-for-Nerds overhaul** with live deltas: per-second decode
+  fps (% of realtime), paint fps, drops/sec, decode-ms breakdown
+  (avg/batch, % of wall, slowest), producer throttle %, queue span
+  + head/tail PTS, newest-decoded PTS, and explicit `PTS REGRESSIONS`
+  / `BSF MISSING` warning lines. Designed to answer "why is playback
+  stuttering" at a glance.
+- **Decoder throughput instrumentation** in the fallback pipeline:
+  `videoDecodeMsTotal`, `videoDecodeBatches`, `audioDecodeMsTotal`,
+  `audioDecodeBatches`, `readMsTotal`, `pumpThrottleMsTotal`,
+  `slowestVideoBatchMs`, `newestVideoPtsMs`, `ptsRegressions`,
+  `worstPtsRegressionMs` all exposed in `getDiagnostics().runtime`.
+- **`avbsf` fragment** in `scripts/build-libav.sh` + libav variant
+  rebuild. The BSF C code (`bsf-mpeg4_unpack_bframes`) was shipped
+  since 2.2.0 but the JS wrappers it needs
+  (`av_bsf_list_parse_str_js`, `av_bsf_init`, `av_bsf_send_packet`,
+  `av_bsf_receive_packet`) were never exported — the fixup was dead
+  at runtime. The BSF now actually runs, and its absence (if ever
+  rebuilt without `avbsf`) surfaces as `bsfMissing` in diagnostics
+  and a loud `console.error`.
+
+### Fixed
+
+- **DivX/Xvid AVI stuttering** — large, clearly visible frame drops
+  (42 % of frames on a typical 25 fps 624×352 episode). Three
+  independent bugs stacked; all fixed now:
+  1. *Synthetic PTS counter ignored valid neighbors.* When libav
+     emitted a frame with `AV_NOPTS_VALUE`, the fallback callback
+     assigned it a timestamp from a counter that started at 0 and
+     only advanced on invalid frames. At minute 5 of playback, one
+     bad frame would be tagged as PTS ≈ 0, jumping the renderer
+     wildly backwards. Now anchored to the last emitted frame's
+     PTS + one frame step, so invalid frames interpolate cleanly.
+  2. *`mpeg4_unpack_bframes` BSF was compiled but unreachable from
+     JS* (see `avbsf` fragment addition above).
+  3. *FPS probe gap for AVI.* `avg_frame_rate_num/_den` don't exist
+     as properties on libav.js stream records; they must be read
+     via `AVCodecParameters_framerate_num/_den`. Every AVI was
+     falling back to a 30 fps default, narrowing the renderer's
+     tolerance window and pushing 25 fps content off-cadence. Now
+     reads the real rate.
+- **Seek freeze in the fallback strategy** — video stayed on the
+  pre-seek frame while audio continued from the new position. Root
+  cause: `hasFrames()` checked `framesPainted > 0`, which is
+  cumulative, so `waitForBuffer()` returned immediately after flush
+  even with an empty queue; audio started before any post-seek
+  frame had been decoded. Fixed with a `hasEverEnqueuedSinceFlush`
+  flag that resets on every `flush()`.
+- **`DataCloneError` after seek** — the post-seek pump hammered the
+  console with `An ArrayBuffer is detached and could not be cloned`
+  on every decode batch. `flushBSF()` was sending a NULL packet as
+  its flush signal, but NULL is the EOF signal — it locked the BSF
+  into EOF state, so every subsequent `av_bsf_send_packet` failed
+  and `applyBSF` fell through to pushing the original input packet,
+  whose buffer had already been transferred to WASM by
+  `ff_copyin_packet`. Now uses `av_bsf_flush` (the actual flush
+  API) and defensively drops rejected packets instead of passing
+  their detached buffers through to the decoder.
+- **Post-seek out-of-order frames from the mpeg4 decoder** —
+  `avcodec_flush_buffers` doesn't always clear the B-frame reorder
+  tail on mpeg4, so the first post-seek batch could contain frames
+  from before the seek mixed with frames from after, in arbitrary
+  order. The renderer's paint loop assumes monotonic queue and
+  breaks (head stuck, newer frames age out to late-drop) when that
+  invariant fails. The decoder now drops any frame whose PTS is
+  less than the previously emitted frame, with a console warning.
+  Counter resets at every seek so a legitimate large jump in PTS
+  after seek is always accepted.
+
 ## [2.12.0]
 
 Network playback performance + seek-bar polish.

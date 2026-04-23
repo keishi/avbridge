@@ -54,9 +54,19 @@ LIBAV_OPTFLAGS="${AVBRIDGE_LIBAV_OPTFLAGS:--O3 -msimd128}"
 # binary size grows roughly linearly with what's enabled.
 #
 # Order doesn't matter, but grouping by purpose makes the diff easy to read.
+#
+# CRITICAL: `avbsf` must be included alongside any `bsf-X` fragment. The
+# `bsf-X` fragments only add `--enable-bsf=X` to FFmpeg's configure line —
+# they compile the BSF C code but do NOT export the JS wrappers
+# (`av_bsf_list_parse_str_js`, `av_bsf_init`, `av_bsf_send_packet`,
+# `av_bsf_receive_packet`). Without `avbsf`, calls from fallback/hybrid
+# decoders fail at runtime with "e.av_bsf_list_parse_str_js is not a
+# function" and packed-B-frame DivX/Xvid files stutter badly (frames
+# decode in bitstream order, renderer drops them as late).
 read -r -d '' VARIANT_FRAGMENTS <<'EOF' || true
 [
   "avformat", "avcodec", "swscale", "swresample",
+  "avbsf",
 
   "demuxer-avi",
   "demuxer-asf",
