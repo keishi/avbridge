@@ -22,7 +22,6 @@ import { dbg } from "../../util/debug.js";
 import { pickLibavVariant } from "../fallback/variant-routing.js";
 import {
   sanitizePacketTimestamp,
-  sanitizeFrameTimestamp,
   libavFrameToInterleavedFloat32,
   packetPtsSec,
 } from "../../util/libav-demux.js";
@@ -248,8 +247,9 @@ export async function startHybridDecoder(opts: StartHybridDecoderOptions): Promi
   let videoChunksFed = 0;
   let bufferedUntilSec = 0;
 
+  // Synthetic video timestamp for packets with AV_NOPTS_VALUE (audio
+  // uses the packet PTS directly — see decodeAudioBatch).
   let syntheticVideoUs = 0;
-  let syntheticAudioUs = 0;
 
   const videoTrackInfo = opts.context.videoTracks.find((t) => t.id === videoStream?.index);
   const videoFps = videoTrackInfo?.fps && videoTrackInfo.fps > 0 ? videoTrackInfo.fps : 30;
@@ -300,7 +300,7 @@ export async function startHybridDecoder(opts: StartHybridDecoderOptions): Promi
       // 10-50 ms. Processing audio first ensures the audio scheduler is
       // fed before video decode starts, reducing perceived stutter.
       if (audioDec && audioPackets && audioPackets.length > 0) {
-        await decodeAudioBatch(audioPackets, myToken);
+        await decodeAudioBatch(audioPackets, myToken, /*flush*/ false, audioTimeBase);
       }
       if (myToken !== pumpToken || destroyed) return;
 
@@ -363,8 +363,22 @@ export async function startHybridDecoder(opts: StartHybridDecoderOptions): Promi
     }
   }
 
-  async function decodeAudioBatch(pkts: LibavPacket[], myToken: number, flush = false) {
+  async function decodeAudioBatch(
+    pkts: LibavPacket[],
+    myToken: number,
+    flush = false,
+    tb?: [number, number],
+  ) {
     if (!audioDec || destroyed || myToken !== pumpToken) return;
+
+    // Capture packet-level PTS before decode (same rationale as fallback
+    // decoder — see POSTMORTEMS.md 2026-05-31: libav's reported
+    // `frame.pts` is unreliable for some container/codec combinations;
+    // the demuxer's packet PTS is reliable). For mp3/aac the packet→frame
+    // mapping is 1:1, so the PTS array aligns with `allFrames`.
+    const pktPtsSec: (number | null)[] = pkts.map((p) =>
+      tb ? packetPtsSec(p, tb) : null,
+    );
 
     // For heavy codecs (DTS, AC3), decode in small sub-batches and yield
     // between them so the event loop can run rAF for video painting.
@@ -409,22 +423,13 @@ export async function startHybridDecoder(opts: StartHybridDecoderOptions): Promi
     if (myToken !== pumpToken || destroyed) return;
     const frames = allFrames;
 
-    for (const f of frames) {
+    for (let i = 0; i < frames.length; i++) {
       if (myToken !== pumpToken || destroyed) return;
-      sanitizeFrameTimestamp(
-        f,
-        () => {
-          const ts = syntheticAudioUs;
-          const samples = f.nb_samples ?? 1024;
-          const sampleRate = f.sample_rate ?? 44100;
-          syntheticAudioUs += Math.round((samples * 1_000_000) / sampleRate);
-          return ts;
-        },
-        audioTimeBase,
-      );
+      const f = frames[i];
       const samples = libavFrameToInterleavedFloat32(f);
       if (samples) {
-        opts.audio.schedule(samples.data, samples.channels, samples.sampleRate);
+        const pts = pktPtsSec[i] ?? null;
+        opts.audio.schedule(samples.data, samples.channels, samples.sampleRate, pts);
         audioFramesDecoded++;
       }
     }
@@ -522,7 +527,6 @@ export async function startHybridDecoder(opts: StartHybridDecoderOptions): Promi
       await flushBSF();
 
       syntheticVideoUs = Math.round(timeSec * 1_000_000);
-      syntheticAudioUs = Math.round(timeSec * 1_000_000);
 
       pumpRunning = pumpLoop(newToken).catch((err) =>
         console.error("[avbridge] hybrid pump failed (post-setAudioTrack):", err),
@@ -566,7 +570,6 @@ export async function startHybridDecoder(opts: StartHybridDecoderOptions): Promi
       await flushBSF();
 
       syntheticVideoUs = Math.round(timeSec * 1_000_000);
-      syntheticAudioUs = Math.round(timeSec * 1_000_000);
 
       pumpRunning = pumpLoop(newToken).catch((err) =>
         console.error("[avbridge] hybrid pump failed (post-seek):", err),

@@ -29,8 +29,15 @@ import { AudioOutput } from "./audio-output.js";
 import type { MediaContext } from "../../types.js";
 import { pickLibavVariant } from "./variant-routing.js";
 import { dbg } from "../../util/debug.js";
+
+/** True when `globalThis.AVBRIDGE_DEBUG` is set. Used to gate verbose
+ *  per-packet / per-frame trace lines that are useful for debugging
+ *  post-seek pts behavior but unreadable in normal use. */
+function isDebug(): boolean {
+  return typeof globalThis !== "undefined"
+    && !!(globalThis as Record<string, unknown>).AVBRIDGE_DEBUG;
+}
 import {
-  sanitizeFrameTimestamp,
   libavFrameToInterleavedFloat32,
   packetPtsSec,
 } from "../../util/libav-demux.js";
@@ -275,9 +282,41 @@ export async function startDecoder(opts: StartDecoderOptions): Promise<DecoderHa
   let watchdogSlowWarned = false;
   let watchdogOverflowWarned = false;
 
-  // Synthetic timestamp counters. Reset on seek.
-  let syntheticVideoUs = 0;
-  let syntheticAudioUs = 0;
+  // Content clock for video frames. Tracks the last frame's content time
+  // in µs. The invariant per emit:
+  //   - raw libav pts valid → lastContentUs = raw_pts (sync to truth)
+  //   - raw libav pts NOPTS → lastContentUs += frameStep (extend by one frame)
+  // This makes synthetic labels always relative to the *immediately
+  // preceding* frame's real content, self-correcting at every valid pts.
+  // -1 means "unanchored" — pre-anchor NOPTS frames are discarded outright
+  // because we don't know where the decoder actually landed. The anchor
+  // is established at the first valid raw pts post-seek.
+  //
+  // This replaced an older "synthetic counter reset to seekTarget on seek"
+  // path which stamped NOPTS preroll frames with the user's requested seek
+  // time — producing labels 4+ seconds ahead of actual content, dropping
+  // every valid-pts frame as a "regression", and surfacing as a ~2s
+  // post-seek fast-forward as the slow-advancing synthetic counter slowly
+  // converged with real content. See POSTMORTEMS.md (2026-06-01).
+  let lastContentUs = -1;
+  let firstValidPtsLoggedSinceSeek = false;
+
+  // Diagnostic: first post-seek audio packet's PTS. Logged once per seek
+  // so the operator can see the demuxer's actual content alignment vs
+  // the user's click. With PTS-based audio scheduling, audio packets
+  // with PTS before the seek target *naturally* don't get scheduled
+  // (their computed ctxStart falls in the past) — no manual trim needed.
+  let seenFirstAudioPacketSinceSeek = false;
+  let seekTargetSec = 0;
+  // Post-seek diagnostic counters. Capture raw pts/dts/pos for the first
+  // ~N packets and frames after each seek so we can tell whether libav
+  // hands us a valid pts at seek landing, when (if ever) it becomes
+  // valid mid-stream, and whether sanitize's NOPTS fallback is firing.
+  let diagPktsLoggedSinceSeek = 0;
+  let diagFramesLoggedSinceSeek = 0;
+  let diagFrameKeysDumped = false;
+  const DIAG_MAX_PKTS = 100;
+  const DIAG_MAX_FRAMES = 300;
 
   // Throughput instrumentation — answers "is the decoder keeping up?".
   // All counters are cumulative since bootstrap (not reset on seek), so
@@ -345,12 +384,60 @@ export async function startDecoder(opts: StartDecoderOptions): Promise<DecoderHa
         for (const pkt of videoPackets) {
           const sec = packetPtsSec(pkt, videoTimeBase);
           if (sec != null && sec > bufferedUntilSec) bufferedUntilSec = sec;
+          // [DIAG-PKT] Raw pre-sanitize packet fields for the first N
+          // post-seek video packets. Most important question: does the
+          // FIRST packet after av_seek_frame carry a valid pts? If yes,
+          // we can anchor synthetic counter to that — cheap & robust.
+          // If no, fall back to pkt_pos → AVI index → chunk_idx × frameDur.
+          if (isDebug() && diagPktsLoggedSinceSeek < DIAG_MAX_PKTS) {
+            const rawHi = (pkt as { ptshi?: number }).ptshi ?? 0;
+            const rawLo = pkt.pts ?? 0;
+            const isInvalidPts = (rawHi === -2147483648 && rawLo === 0);
+            const rawPts64 = isInvalidPts ? null : (rawHi * 0x100000000 + rawLo);
+            const rawSec = rawPts64 != null && videoTimeBase
+              ? (rawPts64 * videoTimeBase[0]) / videoTimeBase[1]
+              : null;
+            const pktKeys = diagPktsLoggedSinceSeek === 0
+              ? `[keys: ${Object.keys(pkt).join(",")}]`
+              : "";
+            // eslint-disable-next-line no-console
+            console.log(
+              `[DIAG-PKT] vidx=${diagPktsLoggedSinceSeek} ` +
+              `pts=${isInvalidPts ? "NOPTS" : rawPts64} ` +
+              `pts_sec=${rawSec != null ? rawSec.toFixed(3) : "n/a"} ` +
+              `ptshi=${rawHi} ptslo=${rawLo} ` +
+              `flags=0x${(pkt.flags ?? 0).toString(16)} ` +
+              `keyframe=${((pkt.flags ?? 0) & 1) ? "Y" : "N"} ` +
+              `stream=${pkt.stream_index} ` +
+              `dataLen=${pkt.data?.length ?? 0} ` +
+              `seekTarget=${seekTargetSec.toFixed(3)} ` +
+              pktKeys,
+            );
+            diagPktsLoggedSinceSeek++;
+          }
         }
       }
       if (audioPackets && audioTimeBase) {
         for (const pkt of audioPackets) {
           const sec = packetPtsSec(pkt, audioTimeBase);
           if (sec != null && sec > bufferedUntilSec) bufferedUntilSec = sec;
+        }
+        // Diagnostic: log the first post-seek audio packet's PTS. With
+        // PTS-based scheduling, packets whose PTS is before the seek
+        // target won't be played (AudioOutput skips them silently), so
+        // this is informational only — it tells you how far off the
+        // demuxer's seek granularity is from the user's click.
+        if (!seenFirstAudioPacketSinceSeek && audioPackets.length > 0) {
+          const firstSec = packetPtsSec(audioPackets[0], audioTimeBase);
+          if (firstSec != null && Number.isFinite(firstSec)) {
+            seenFirstAudioPacketSinceSeek = true;
+            dbg.info("av-anchor",
+              `seek-target=${seekTargetSec.toFixed(3)}s, ` +
+              `first-audio-pkt-pts=${firstSec.toFixed(3)}s ` +
+              `(Δ=${((firstSec - seekTargetSec) * 1000).toFixed(1)}ms — ` +
+              `pre-target packets will be skipped by AudioOutput)`,
+            );
+          }
         }
       }
 
@@ -363,7 +450,7 @@ export async function startDecoder(opts: StartDecoderOptions): Promise<DecoderHa
       // packet for cook/mp3/aac, so doing it first barely delays
       // video decoding at all.
       if (audioDec && audioPackets && audioPackets.length > 0) {
-        await decodeAudioBatch(audioPackets, myToken);
+        await decodeAudioBatch(audioPackets, myToken, /*flush*/ false, audioTimeBase);
       }
       if (myToken !== pumpToken || destroyed) return;
       if (videoDec && videoPackets && videoPackets.length > 0) {
@@ -431,21 +518,22 @@ export async function startDecoder(opts: StartDecoderOptions): Promise<DecoderHa
         }
       }
 
-      // Throttle: don't run too far ahead of playback. Two backpressure
-      // signals:
-      //   - Audio buffer (mediaTimeOfNext - now()) > 2 sec — we have
-      //     plenty of audio scheduled.
-      //   - Renderer queue depth >= queueHighWater — the canvas can't
-      //     drain fast enough. Without this, fast software decode of
-      //     small frames piles up in the renderer and overflows.
+      // Throttle: only on audio buffer (mediaTimeOfNext - now() > 2 s).
+      // Renderer queue backpressure is enforced at the *enqueue* side in
+      // `decodeVideoBatch` — when the queue is at `queueHighWater`, the
+      // freshly decoded VideoFrame is closed without being enqueued, so
+      // the decoder keeps consuming packets in order. That preserves the
+      // reference-frame state needed to decode P/B frames cleanly during
+      // post-seek catch-up. Throttling the *pump* on queue depth here
+      // would block demuxer reads, which would also stall audio packet
+      // processing and starve `audio.bufferAhead()`.
       {
         const _throttleStart = performance.now();
         let _throttled = false;
         while (
           !destroyed &&
           myToken === pumpToken &&
-          (opts.audio.bufferAhead() > 2.0 ||
-            opts.renderer.queueDepth() >= opts.renderer.queueHighWater)
+          opts.audio.bufferAhead() > 2.0
         ) {
           _throttled = true;
           await new Promise((r) => setTimeout(r, 50));
@@ -494,31 +582,160 @@ export async function startDecoder(opts: StartDecoderOptions): Promise<DecoderHa
 
     for (const f of frames) {
       if (myToken !== pumpToken || destroyed) return;
-      sanitizeFrameTimestamp(
-        f,
-        () => {
-          // Anchor the synthetic timestamp to the last emitted frame's
-          // pts + one frame step. A plain counter (the old behavior)
-          // started at 0 and only advanced on invalid frames, which
-          // made the occasional AV_NOPTS_VALUE output get assigned a
-          // timestamp near the stream start — causing the renderer to
-          // paint backwards and drop healthy frames around it. Anchoring
-          // to `lastEmittedPtsUs` keeps invalid frames monotonic with
-          // their valid neighbors.
-          const base =
-            lastEmittedPtsUs >= 0
-              ? lastEmittedPtsUs + videoFrameStepUs
-              : syntheticVideoUs;
-          syntheticVideoUs = base + videoFrameStepUs;
-          return base;
-        },
-        videoTimeBase,
-      );
-      // sanitizeFrameTimestamp normalizes pts to µs, so the bridge can
-      // always use the 1/1e6 timebase.
-      const _fPts = (f.ptshi ?? 0) * 0x100000000 + (f.pts ?? 0);
+      // [DIAG-FRAME] Capture raw pre-sanitize fields. One-shot key dump
+      // on first frame post-seek so we can see which fields libav
+      // actually exposes (best_effort_timestamp? pkt_dts? pkt_pos?).
+      const _diagShouldLog = isDebug() && diagFramesLoggedSinceSeek < DIAG_MAX_FRAMES;
+      const _diagRawHi = f.ptshi ?? 0;
+      const _diagRawLo = f.pts ?? 0;
+      const _diagInvalid = (_diagRawHi === -2147483648 && _diagRawLo === 0);
+      const _diagRawPts64 = _diagInvalid ? null : (_diagRawHi * 0x100000000 + _diagRawLo);
+      const _diagRawSec = _diagRawPts64 != null && videoTimeBase
+        ? (_diagRawPts64 * videoTimeBase[0]) / videoTimeBase[1]
+        : null;
+      if (_diagShouldLog && !diagFrameKeysDumped) {
+        diagFrameKeysDumped = true;
+        const allKeys = Object.keys(f);
+        const fieldDump: Record<string, unknown> = {};
+        for (const k of allKeys) {
+          const v = (f as unknown as Record<string, unknown>)[k];
+          // Skip the data buffer; everything else is metadata.
+          if (k === "data") continue;
+          if (typeof v === "object" && v !== null && "length" in (v as object)) continue;
+          fieldDump[k] = v;
+        }
+        // eslint-disable-next-line no-console
+        console.log(`[DIAG-FRAME] FIRST FRAME post-seek — all keys: ${allKeys.join(",")}`);
+        // eslint-disable-next-line no-console
+        console.log(`[DIAG-FRAME] FIRST FRAME field dump:`, fieldDump);
+      }
+      // Convert raw libav pts (in stream timebase) to µs, or null if NOPTS.
+      let rawUs: number | null = null;
+      if (!_diagInvalid && _diagRawPts64 != null) {
+        const tb = videoTimeBase ?? [1, 1_000_000];
+        const us = Math.round((_diagRawPts64 * 1_000_000 * tb[0]) / tb[1]);
+        if (Number.isFinite(us) && Math.abs(us) <= Number.MAX_SAFE_INTEGER) {
+          rawUs = us;
+        }
+      }
+
+      // Forward declare _diagLog so PRE-ANCHOR-DROP can call it.
+      // Final pts isn't known until after the anchor/step block, so we pass
+      // it as a parameter rather than closing over a `let`.
+      const _diagLog = (decision: string, finalPtsUs: number, sanFallback: boolean): void => {
+        if (!_diagShouldLog) return;
+        const ptsSrc = sanFallback
+          ? `SYNTHETIC(${_diagInvalid ? "NOPTS" : "invalid-range"})`
+          : "LIBAV";
+        // eslint-disable-next-line no-console
+        console.log(
+          `[DIAG-FRAME] vidx=${diagFramesLoggedSinceSeek} ` +
+          `raw_pts=${_diagInvalid ? "NOPTS" : _diagRawPts64} ` +
+          `raw_pts_sec=${_diagRawSec != null ? _diagRawSec.toFixed(3) : "n/a"} ` +
+          `pts_src=${ptsSrc} ` +
+          `final_pts_us=${finalPtsUs} ` +
+          `final_pts_sec=${(finalPtsUs / 1_000_000).toFixed(3)} ` +
+          `seekTarget=${seekTargetSec.toFixed(3)} ` +
+          `offset_to_target_ms=${((finalPtsUs / 1000) - (seekTargetSec * 1000)).toFixed(1)} ` +
+          `lastEmittedPts_us=${lastEmittedPtsUs} ` +
+          `decision=${decision}`,
+        );
+        diagFramesLoggedSinceSeek++;
+      };
+
+      // Anchor + step invariant.
+      //   - Unanchored (post-seek, no valid pts seen yet) AND NOPTS frame
+      //     → discard outright. We don't know where the decoder landed, so
+      //     stamping a synthetic label would be a lie (this was the source
+      //     of the post-seek fast-forward bug).
+      //   - First valid raw pts → anchor `lastContentUs` to it. The pipeline
+      //     below will then drop this and subsequent frames as pre-target
+      //     until content reaches seekTarget.
+      //   - Anchored AND valid → sync `lastContentUs` to truth.
+      //   - Anchored AND NOPTS → step `lastContentUs += frameStep`.
+      let _diagSanFallbackFired = false;
+      const seekTargetUs = Math.round(seekTargetSec * 1_000_000);
+      if (lastContentUs < 0) {
+        if (rawUs == null) {
+          // Cold-start keyframe special case. At seekTargetSec === 0 the
+          // demuxer guarantees the very first emitted keyframe is content
+          // 0 (container start=0.000000). Anchoring there directly avoids
+          // discarding the opening I-frame — without this, cold start
+          // loses 1-2 frames and the first paint is ~80ms late.
+          //
+          // STRICTLY gated to seekTarget === 0. The seek path proved
+          // correct via the offset-ground-truth experiment (POSTMORTEMS
+          // 2026-06-01); this branch must not change its behavior.
+          //
+          // Why keyframe-pin instead of back-computing from the first
+          // valid pts: the I/P/B reorder is densest at the stream head,
+          // so `firstValidPts − N × frameStep` is off by however many
+          // early B-frames the decoder dropped. The keyframe identity
+          // (`f.key_frame === 1`) is the only signal that doesn't depend
+          // on frame-spacing assumptions.
+          const isColdStartKeyframe =
+            seekTargetSec === 0
+            && (f as { key_frame?: number }).key_frame === 1;
+          if (isColdStartKeyframe) {
+            lastContentUs = 0;
+            _diagSanFallbackFired = true;
+            // Fall through: the frame gets labeled 0 and runs through
+            // the regression/pre-target/enqueue pipeline normally.
+          } else {
+            // Pre-anchor NOPTS: discard. Decoder retains the frame internally
+            // as a reference — we just don't expose it to the renderer.
+            _diagLog("PRE-ANCHOR-DROP", 0, true);
+            continue;
+          }
+        } else {
+          // First valid raw pts post-seek = the anchor.
+          lastContentUs = rawUs;
+          if (!firstValidPtsLoggedSinceSeek) {
+            firstValidPtsLoggedSinceSeek = true;
+            if (isDebug()) {
+              // eslint-disable-next-line no-console
+              console.log(
+                `[avbridge:decoder] post-seek anchor established: ` +
+                `first valid raw pts = ${(rawUs / 1000).toFixed(1)}ms ` +
+                `(seekTarget = ${(seekTargetSec * 1000).toFixed(1)}ms, ` +
+                `Δ = ${((rawUs - seekTargetUs) / 1000).toFixed(1)}ms)`,
+              );
+            }
+            // Guard: if the first valid pts is at or beyond the seek
+            // target, the pre-anchor NOPTS frames we already discarded
+            // may have straddled the target. In normal AVI MPEG-4 seeks,
+            // the demuxer lands well before the target (previous
+            // keyframe), so this shouldn't happen — log a warning if it
+            // does so we know to implement a pkt_pos→AVI-index
+            // back-computation path. The cold-start case (seekTarget=0)
+            // is handled by the keyframe-pin branch above and shouldn't
+            // reach this warning.
+            if (rawUs >= seekTargetUs) {
+              // eslint-disable-next-line no-console
+              console.warn(
+                `[avbridge:decoder] first valid raw pts ≥ seek target — ` +
+                `pre-anchor NOPTS frames may have straddled the target ` +
+                `and been mis-discarded. First painted frame may be late ` +
+                `by up to one keyframe interval.`,
+              );
+            }
+          }
+        }
+      } else {
+        if (rawUs != null) {
+          lastContentUs = rawUs; // sync to truth on every valid pts
+        } else {
+          lastContentUs += videoFrameStepUs; // extend from last truth
+          _diagSanFallbackFired = true;
+        }
+      }
+      // Write the content label into the frame so the bridge sees it.
+      f.pts = lastContentUs;
+      f.ptshi = lastContentUs < 0 ? -1 : 0;
+      const _fPts = lastContentUs;
       if (_fPts > newestVideoPtsUs) newestVideoPtsUs = _fPts;
       if (lastEmittedPtsUs >= 0 && _fPts < lastEmittedPtsUs) {
+        _diagLog("REGRESSED-DROP", _fPts, _diagSanFallbackFired);
         // Decoder emitted a frame with lower PTS than the previous
         // output. Dropping out-of-order frames here is the right move:
         // the renderer's paint loop assumes monotonic queue order and
@@ -545,20 +762,70 @@ export async function startDecoder(opts: StartDecoderOptions): Promise<DecoderHa
         continue; // skip enqueue
       }
       lastEmittedPtsUs = _fPts;
+      // Decode-to-display: after a seek the demuxer lands at the
+      // keyframe ≤ click target and the decoder produces frames
+      // starting there. Pre-target frames are still DECODED (they're
+      // reference frames for later P/B decodes) but they MUST NOT be
+      // displayed — otherwise the renderer paints them in a brief
+      // fast-forward burst as it catches up to audio (T_click). Drop
+      // them at the enqueue boundary; the decoder doesn't care.
+      //
+      // Tolerance of one frame duration: source frames are quantized
+      // (PTS = N × frameStep) but the user's click is arbitrary, so
+      // the frame nearest the click is typically a few ms *before* it.
+      // Convention (matches `<video>.currentTime = T` and ffplay):
+      // display the frame at the largest PTS ≤ T.
+      const targetUs = Math.round(seekTargetSec * 1_000_000);
+      if (_fPts < targetUs - videoFrameStepUs) {
+        _diagLog("PRE-TARGET-DROP", _fPts, _diagSanFallbackFired);
+        continue;
+      }
       try {
         const vf = bridge.laFrameToVideoFrame(f, { timeBase: [1, 1_000_000] });
-        opts.renderer.enqueue(vf);
+        // Renderer-queue backpressure at the enqueue side. Discarding
+        // here (rather than throttling the pump on `queueHighWater`)
+        // keeps the decoder consuming packets sequentially so its
+        // reference-frame state stays intact — essential during
+        // post-seek catch-up, when the pump must continue reading
+        // packets to advance the demuxer past pre-target audio. Without
+        // sequential decode, the next batch's P/B frames decode against
+        // a stale reference and produce gray + glitchy output until
+        // the next keyframe.
+        if (opts.renderer.queueDepth() >= opts.renderer.queueHighWater) {
+          vf.close();
+          _diagLog("OVERFLOW-DROP", _fPts, _diagSanFallbackFired);
+        } else {
+          opts.renderer.enqueue(vf);
+          _diagLog("ENQUEUED", _fPts, _diagSanFallbackFired);
+        }
         videoFramesDecoded++;
       } catch (err) {
         if (videoFramesDecoded === 0) {
           console.warn("[avbridge] laFrameToVideoFrame failed:", err);
         }
+        _diagLog("BRIDGE-ERROR", _fPts, _diagSanFallbackFired);
       }
     }
   }
 
-  async function decodeAudioBatch(pkts: LibavPacket[], myToken: number, flush = false) {
+  async function decodeAudioBatch(
+    pkts: LibavPacket[],
+    myToken: number,
+    flush = false,
+    tb?: [number, number],
+  ) {
     if (!audioDec || destroyed || myToken !== pumpToken) return;
+    // Capture the packet-level PTS *before* decoding. libav's reported
+    // `frame.pts` after decode is unreliable for mp3-in-AVI (returns a
+    // value that doesn't agree with the stream's reported time base —
+    // see POSTMORTEMS.md 2026-05-31). The demuxer's packet PTS is
+    // reliable, and for mp3/aac the packet→frame mapping is 1:1, so we
+    // forward each packet's PTS to the matching output frame. For codecs
+    // where the mapping isn't 1:1, the trailing frames fall back to a
+    // synthetic running counter — same behavior as before this change.
+    const pktPtsSec: (number | null)[] = pkts.map((p) =>
+      tb ? packetPtsSec(p, tb) : null,
+    );
     let frames: LibavFrame[];
     const _t0 = performance.now();
     try {
@@ -577,22 +844,21 @@ export async function startDecoder(opts: StartDecoderOptions): Promise<DecoderHa
     audioDecodeBatches++;
     if (myToken !== pumpToken || destroyed) return;
 
-    for (const f of frames) {
+    for (let i = 0; i < frames.length; i++) {
       if (myToken !== pumpToken || destroyed) return;
-      sanitizeFrameTimestamp(
-        f,
-        () => {
-          const ts = syntheticAudioUs;
-          const samples = f.nb_samples ?? 1024;
-          const sampleRate = f.sample_rate ?? 44100;
-          syntheticAudioUs += Math.round((samples * 1_000_000) / sampleRate);
-          return ts;
-        },
-        audioTimeBase,
-      );
+      const f = frames[i];
       const samples = libavFrameToInterleavedFloat32(f);
       if (samples) {
-        opts.audio.schedule(samples.data, samples.channels, samples.sampleRate);
+        const pts = pktPtsSec[i] ?? null;
+        if (isDebug()) {
+          const dur = samples.data.length / samples.channels / samples.sampleRate;
+          // Log every frame — we need to see what happens around seeks.
+          // Also surface explicitly when the per-frame PTS is null, which
+          // would route the chunk to the LEGACY rebase path in AudioOutput.
+          // eslint-disable-next-line no-console
+          console.log(`[TRACE-DEC] audio frame #${audioFramesDecoded} pts=${pts != null ? pts.toFixed(4) : "NULL"} dur=${dur.toFixed(4)} samples=${samples.data.length / samples.channels} sr=${samples.sampleRate} ch=${samples.channels} pktsIn=${pkts.length} framesOut=${frames.length}`);
+        }
+        opts.audio.schedule(samples.data, samples.channels, samples.sampleRate, pts);
         audioFramesDecoded++;
       }
     }
@@ -682,9 +948,9 @@ export async function startDecoder(opts: StartDecoderOptions): Promise<DecoderHa
       try { if (videoDec) await libav.avcodec_flush_buffers?.(videoDec.c); } catch { /* ignore */ }
       await flushBSF();
 
-      syntheticVideoUs = Math.round(timeSec * 1_000_000);
-      syntheticAudioUs = Math.round(timeSec * 1_000_000);
+      lastContentUs = -1;
       lastEmittedPtsUs = -1;
+      firstValidPtsLoggedSinceSeek = false;
 
       pumpRunning = pumpLoop(newToken).catch((err) =>
         console.error("[avbridge] fallback pump failed (post-setAudioTrack):", err),
@@ -692,6 +958,10 @@ export async function startDecoder(opts: StartDecoderOptions): Promise<DecoderHa
     },
 
     async seek(timeSec) {
+      if (isDebug()) {
+        // eslint-disable-next-line no-console
+        console.log(`[SEEK] target=${timeSec.toFixed(3)}s (${(timeSec * 1000).toFixed(0)}ms) wall=${performance.now().toFixed(0)}`);
+      }
       // Cancel the current pump and wait for it to actually exit before
       // we start moving file pointers around — concurrent ff_decode_multi
       // and av_seek_frame on the same context would be a recipe for memory
@@ -739,11 +1009,19 @@ export async function startDecoder(opts: StartDecoderOptions): Promise<DecoderHa
       } catch { /* ignore */ }
       await flushBSF();
 
-      // Reset synthetic timestamp counters to the seek target so newly
-      // decoded frames start at the right media time.
-      syntheticVideoUs = Math.round(timeSec * 1_000_000);
-      syntheticAudioUs = Math.round(timeSec * 1_000_000);
+      // Reset the content clock to "unanchored". The next decode loop
+      // will discard NOPTS frames until the first valid libav pts
+      // establishes a real anchor, then label every frame relative to
+      // truth. Do NOT set anything to seekTarget here — that lie was
+      // the post-seek fast-forward bug.
+      lastContentUs = -1;
       lastEmittedPtsUs = -1;
+      firstValidPtsLoggedSinceSeek = false;
+      seenFirstAudioPacketSinceSeek = false;
+      seekTargetSec = timeSec;
+      diagPktsLoggedSinceSeek = 0;
+      diagFramesLoggedSinceSeek = 0;
+      diagFrameKeysDumped = false;
 
       // The renderer & audio output are reset by the fallback session
       // wrapper that called us — see strategies/fallback/index.ts.

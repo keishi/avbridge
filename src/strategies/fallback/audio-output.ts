@@ -35,6 +35,17 @@ interface PendingChunk {
   sampleRate: number;
   frameCount: number;
   durationSec: number;
+  /** Source-domain content PTS in seconds. `null` for legacy callers
+   *  that schedule sequentially without PTS information. */
+  ptsSec: number | null;
+}
+
+/** True when `globalThis.AVBRIDGE_DEBUG` is set. Used to gate [TRACE-AUD]
+ *  per-chunk logs that are useful for diagnosing scheduling drift but
+ *  unreadable in normal use. */
+function isDebug(): boolean {
+  return typeof globalThis !== "undefined"
+    && !!(globalThis as Record<string, unknown>).AVBRIDGE_DEBUG;
 }
 
 export interface ClockSource {
@@ -42,6 +53,14 @@ export interface ClockSource {
   now(): number;
   /** True if media is currently playing (audio scheduler is running). */
   isPlaying(): boolean;
+  /**
+   * Media time at which the current playback session was anchored — i.e. the
+   * seek target after the most recent `reset()`, or 0 on cold start. Used by
+   * the video renderer for post-flush PTS calibration: `now()` includes any
+   * decode-stall lag accumulated since playback resumed, but the anchor is
+   * a stable reference that maps directly to the user's intended position.
+   */
+  anchorTime(): number;
 }
 
 export class AudioOutput implements ClockSource {
@@ -69,6 +88,17 @@ export class AudioOutput implements ClockSource {
 
   /** Anchor: media time `mediaTimeOfAnchor` corresponds to ctx time `ctxTimeAtAnchor`. */
   private mediaTimeOfAnchor = 0;
+
+  /**
+   * Ctx time at which the first audible chunk will start playing. `-1`
+   * before any chunk has been scheduled successfully (clock is frozen);
+   * the actual ctx time once one has. The renderer's `clock.now()` uses
+   * this to avoid advancing during the silent-gap window between
+   * `audio.start()` and the first chunk that schedules without being
+   * dropped — that gap is what produces the "audio-less fast-forward"
+   * the user sees post-seek when the gate releases on video-only grace.
+   */
+  private firstAudibleCtxStart = -1;
   private ctxTimeAtAnchor = 0;
 
   private pendingQueue: PendingChunk[] = [];
@@ -154,8 +184,27 @@ export class AudioOutput implements ClockSource {
       return this.mediaTimeOfAnchor;
     }
     if (this.state === "playing") {
+      // Freeze the clock until the first audio chunk has actually been
+      // scheduled. Without this, when `audio.start()` fires before any
+      // post-seek audio packets have made it through the decoder (e.g. the
+      // gate's "video-only grace" path released early), `clock.now()`
+      // would advance from `mediaTimeOfAnchor` at 1× wall time while the
+      // audio scheduler is dropping every chunk that arrives (their
+      // PTS-derived `ctxStart` is already in the past). The renderer would
+      // paint frames during that silent window — the user perceives that
+      // as a "fast-forward burst with no audio." When the first chunk
+      // finally arrives and schedules normally, `firstAudibleCtxStart` is
+      // set and the clock unfreezes from there in sync with the audible
+      // content's PTS.
+      if (this.firstAudibleCtxStart < 0) {
+        return this.mediaTimeOfAnchor;
+      }
       return this.mediaTimeOfAnchor + (this.ctx.currentTime - this.ctxTimeAtAnchor) * this._rate;
     }
+    return this.mediaTimeOfAnchor;
+  }
+
+  anchorTime(): number {
     return this.mediaTimeOfAnchor;
   }
 
@@ -192,18 +241,55 @@ export class AudioOutput implements ClockSource {
    * Schedule a chunk of decoded samples. Queues internally while idle (cold
    * start or post-seek), schedules directly to the audio graph while playing.
    * In wall-clock mode, samples are silently discarded.
+   *
+   * `ptsSec` is the chunk's source-domain content PTS in seconds, from
+   * the demuxer. When provided, the chunk plays at the ctx-time
+   * corresponding to that PTS — so pre-target audio after a seek
+   * naturally drops (its computed `ctxStart` falls in the past) and
+   * post-target audio plays at its true content time, without any
+   * external trim or anchor rebase. When `ptsSec` is null (cold start
+   * with no PTS yet, or codecs whose packet→frame mapping isn't 1:1),
+   * the chunk is scheduled sequentially after `mediaTimeOfNext` — the
+   * pre-refactor behavior.
    */
-  schedule(samples: Float32Array, channels: number, sampleRate: number): void {
+  schedule(
+    samples: Float32Array,
+    channels: number,
+    sampleRate: number,
+    ptsSec?: number | null,
+  ): void {
     if (this.destroyed || this.noAudio) return;
     const frameCount = samples.length / channels;
     const durationSec = frameCount / sampleRate;
+    const hasPts = ptsSec != null && Number.isFinite(ptsSec);
 
-    if (this.state === "idle" || this.state === "paused") {
-      this.pendingQueue.push({ samples, channels, sampleRate, frameCount, durationSec });
+    // Pre-target gate: a chunk whose entire PTS span is before the
+    // current media anchor will be silently dropped by `scheduleNow`
+    // (its `ctxStart` falls in the past). We must apply the same drop
+    // here in idle/paused state too — otherwise the chunk sits in
+    // `pendingQueue`, `bufferAhead()` reports it as buffered audio,
+    // `waitForBuffer()`'s gate releases on a phantom audio buffer, and
+    // `audio.start()` fires with a queue full of chunks that immediately
+    // drop on drain. The user sees post-seek "sped up no audio" while
+    // the demuxer slowly chews through pre-target packets — `clock.now()`
+    // is advancing on wall time and the renderer paints video against
+    // it, but `node.start()` is never being called.
+    if (hasPts && (ptsSec as number) + durationSec / this._rate < this.mediaTimeOfAnchor) {
       return;
     }
 
-    this.scheduleNow(samples, channels, sampleRate, frameCount);
+    if (this.state === "idle" || this.state === "paused") {
+      this.pendingQueue.push({
+        samples, channels, sampleRate, frameCount, durationSec,
+        ptsSec: hasPts ? (ptsSec as number) : null,
+      });
+      return;
+    }
+
+    this.scheduleNow(
+      samples, channels, sampleRate, frameCount,
+      hasPts ? (ptsSec as number) : null,
+    );
   }
 
   private scheduleNow(
@@ -211,7 +297,67 @@ export class AudioOutput implements ClockSource {
     channels: number,
     sampleRate: number,
     frameCount: number,
+    ptsSec: number | null,
   ): void {
+    const durationSec = frameCount / sampleRate;
+
+    // Compute ctxStart. Two paths:
+    //
+    //   PTS-known: the chunk's content PTS maps to a specific ctx time
+    //   via (mediaTimeOfAnchor, ctxTimeAtAnchor). If that ctx time is
+    //   already in the past, the chunk represents audio the user should
+    //   have heard before now — drop it. After a seek, this is what
+    //   *automatically* skips pre-target audio packets returned by a
+    //   keyframe-aligned demuxer seek; no manual trim needed.
+    //
+    //   PTS-unknown (legacy): chain after the last-scheduled sample
+    //   via `mediaTimeOfNext`. Same behavior as before the refactor.
+    let ctxStart: number;
+    if (ptsSec != null) {
+      ctxStart = this.ctxTimeAtAnchor + (ptsSec - this.mediaTimeOfAnchor) / this._rate;
+      if (isDebug()) {
+        // eslint-disable-next-line no-console
+        console.log(`[TRACE-AUD] PTS sched #${this.framesScheduled} pts=${ptsSec.toFixed(3)} dur=${durationSec.toFixed(4)} ctxStart=${ctxStart.toFixed(4)} ctxNow=${this.ctx.currentTime.toFixed(4)} anchor=${this.mediaTimeOfAnchor.toFixed(3)} ctxAnchor=${this.ctxTimeAtAnchor.toFixed(4)} mtNext=${this.mediaTimeOfNext.toFixed(3)} rate=${this._rate}`);
+      }
+      if (ctxStart < this.ctx.currentTime - 0.001) {
+        if (isDebug()) {
+          // eslint-disable-next-line no-console
+          console.log(`[TRACE-AUD] DROP late chunk pts=${ptsSec.toFixed(3)} ctxStart=${ctxStart.toFixed(4)} < ctxNow=${this.ctx.currentTime.toFixed(4)}`);
+        }
+        return;
+      }
+      // First chunk to schedule successfully unfreezes `clock.now()`.
+      // We rebase the anchor onto this chunk: when ctx reaches `ctxStart`,
+      // clock should equal `ptsSec` (so `audioNow` matches audible content
+      // PTS exactly when the chunk plays). The renderer's deadline will
+      // then advance from there, in lockstep with what's audible.
+      if (this.firstAudibleCtxStart < 0) {
+        this.firstAudibleCtxStart = ctxStart;
+        this.mediaTimeOfAnchor = ptsSec;
+        this.ctxTimeAtAnchor = ctxStart;
+        if (isDebug()) {
+          // eslint-disable-next-line no-console
+          console.log(`[TRACE-AUD] UNFREEZE clock — first audible chunk pts=${ptsSec.toFixed(3)} ctxStart=${ctxStart.toFixed(4)} → anchor=${this.mediaTimeOfAnchor.toFixed(3)} ctxAnchor=${this.ctxTimeAtAnchor.toFixed(4)}`);
+        }
+      }
+      const endMediaTime = ptsSec + durationSec / this._rate;
+      if (endMediaTime > this.mediaTimeOfNext) {
+        this.mediaTimeOfNext = endMediaTime;
+      }
+    } else {
+      ctxStart = this.ctxTimeAtAnchor + (this.mediaTimeOfNext - this.mediaTimeOfAnchor) / this._rate;
+      // eslint-disable-next-line no-console
+      console.warn(`[TRACE-AUD] LEGACY (no PTS) sched dur=${durationSec.toFixed(4)} ctxStart=${ctxStart.toFixed(4)} ctxNow=${this.ctx.currentTime.toFixed(4)}`);
+      if (ctxStart < this.ctx.currentTime) {
+        // eslint-disable-next-line no-console
+        console.warn(`[TRACE-AUD] REBASE anchor was=${this.mediaTimeOfAnchor.toFixed(3)} ctxAnchor was=${this.ctxTimeAtAnchor.toFixed(4)} → anchor=${this.mediaTimeOfNext.toFixed(3)} ctxAnchor=${this.ctx.currentTime.toFixed(4)}`);
+        this.ctxTimeAtAnchor = this.ctx.currentTime;
+        this.mediaTimeOfAnchor = this.mediaTimeOfNext;
+        ctxStart = this.ctx.currentTime;
+      }
+      this.mediaTimeOfNext += durationSec;
+    }
+
     const buffer = this.ctx.createBuffer(channels, frameCount, sampleRate);
     for (let ch = 0; ch < channels; ch++) {
       const channelData = buffer.getChannelData(ch);
@@ -222,38 +368,8 @@ export class AudioOutput implements ClockSource {
     const node = this.ctx.createBufferSource();
     node.buffer = buffer;
     node.connect(this.gain);
-    // Pitch the audio to match the playback rate (same as native <video>).
     if (this._rate !== 1) node.playbackRate.value = this._rate;
-
-    // Convert media time → ctx time using the anchor + rate. At rate=2,
-    // each second of media time occupies 0.5s of ctx time.
-    let ctxStart = this.ctxTimeAtAnchor + (this.mediaTimeOfNext - this.mediaTimeOfAnchor) / this._rate;
-
-    // When the decoder is slower than realtime, `ctxStart` falls into
-    // the past (ctx.currentTime has already passed it). Clamping each
-    // sample to `ctx.currentTime` individually (the old behavior)
-    // caused every stale sample in a burst to start at *the same
-    // instant*, stacking them on top of each other — the audible
-    // symptom was a series of clicks / a chord of stuttering cook
-    // packets.
-    //
-    // Correct behavior: when the first sample of a burst is behind,
-    // *rebase the anchor forward* so ctxStart = ctx.currentTime now.
-    // Subsequent samples in the same burst then schedule at
-    // ctxStart + offset as usual, laying out sequentially on the
-    // timeline instead of piling up. The downside is a visible jump
-    // in the audio clock — but the alternative was silent corruption.
-    // `now()` readers (the video renderer) just see the clock step
-    // forward and drop any frames older than the new time.
-    if (ctxStart < this.ctx.currentTime) {
-      this.ctxTimeAtAnchor = this.ctx.currentTime;
-      this.mediaTimeOfAnchor = this.mediaTimeOfNext;
-      ctxStart = this.ctx.currentTime;
-    }
-
     node.start(ctxStart);
-
-    this.mediaTimeOfNext += frameCount / sampleRate;
     this.framesScheduled++;
   }
 
@@ -286,6 +402,10 @@ export class AudioOutput implements ClockSource {
     try { this.gain.connect(this.ctx.destination); } catch { /* ignore */ }
 
     if (this.state === "paused") {
+      if (isDebug()) {
+        // eslint-disable-next-line no-console
+        console.log(`[TRACE-AUD] START(resume) anchor=${this.mediaTimeOfAnchor.toFixed(3)} ctxAnchor=${this.ctxTimeAtAnchor.toFixed(4)} → ctxAnchor=${this.ctx.currentTime.toFixed(4)} ctxNow=${this.ctx.currentTime.toFixed(4)} pendingCount=${this.pendingQueue.length}`);
+      }
       // Resume: media time should continue from where we paused. ctx.currentTime
       // is preserved across suspend/resume, so re-anchoring it to "now" with
       // the same mediaTimeOfAnchor gives a continuous clock.
@@ -295,7 +415,7 @@ export class AudioOutput implements ClockSource {
       const drain = this.pendingQueue;
       this.pendingQueue = [];
       for (const c of drain) {
-        this.scheduleNow(c.samples, c.channels, c.sampleRate, c.frameCount);
+        this.scheduleNow(c.samples, c.channels, c.sampleRate, c.frameCount, c.ptsSec);
       }
       return;
     }
@@ -307,11 +427,15 @@ export class AudioOutput implements ClockSource {
     this.ctxTimeAtAnchor = this.ctx.currentTime + STARTUP_DELAY;
     this.mediaTimeOfNext = this.mediaTimeOfAnchor;
     this.state = "playing";
+    if (isDebug()) {
+      // eslint-disable-next-line no-console
+      console.log(`[TRACE-AUD] START(cold) anchor=${this.mediaTimeOfAnchor.toFixed(3)} ctxAnchor=${this.ctxTimeAtAnchor.toFixed(4)} mtNext=${this.mediaTimeOfNext.toFixed(3)} ctxNow=${this.ctx.currentTime.toFixed(4)} pendingCount=${this.pendingQueue.length}`);
+    }
 
     const drain = this.pendingQueue;
     this.pendingQueue = [];
     for (const c of drain) {
-      this.scheduleNow(c.samples, c.channels, c.sampleRate, c.frameCount);
+      this.scheduleNow(c.samples, c.channels, c.sampleRate, c.frameCount, c.ptsSec);
     }
   }
 
@@ -341,6 +465,10 @@ export class AudioOutput implements ClockSource {
    * supplying new samples) and then call `start()` to resume playback.
    */
   async reset(newMediaTime: number): Promise<void> {
+    if (isDebug()) {
+      // eslint-disable-next-line no-console
+      console.log(`[TRACE-AUD] RESET to=${newMediaTime.toFixed(3)} prev_anchor=${this.mediaTimeOfAnchor.toFixed(3)} prev_mtNext=${this.mediaTimeOfNext.toFixed(3)} prev_ctxAnchor=${this.ctxTimeAtAnchor.toFixed(4)} ctxNow=${this.ctx.currentTime.toFixed(4)} state=${this.state}`);
+    }
     if (this.noAudio) {
       this.pendingQueue = [];
       this.mediaTimeOfAnchor = newMediaTime;
@@ -358,6 +486,7 @@ export class AudioOutput implements ClockSource {
     this.mediaTimeOfAnchor = newMediaTime;
     this.mediaTimeOfNext = newMediaTime;
     this.ctxTimeAtAnchor = this.ctx.currentTime;
+    this.firstAudibleCtxStart = -1;
     this.state = "idle";
 
     if (this.ctx.state === "running") {

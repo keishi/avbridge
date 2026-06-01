@@ -129,6 +129,13 @@ export async function createRemuxPipeline(
     }
 
     let mimePromise: Promise<string> | null = null;
+    // Capture the active pump token at the moment this output was created.
+    // A subsequent seek bumps `pumpToken`, and any in-flight write from this
+    // (now-stale) output must drop its chunk instead of appending to the
+    // SourceBuffer — otherwise stale fragments land at their original
+    // timestamps, the deferred seek applies against the wrong buffered
+    // range, and the video snaps to the end of the stale range.
+    const myToken = pumpToken;
 
     const writable = new WritableStream<{
       type: "write";
@@ -136,11 +143,13 @@ export async function createRemuxPipeline(
       position: number;
     }>({
       write: async (chunk) => {
-        if (destroyed) return;
+        if (destroyed || pumpToken !== myToken) return;
         if (!sink) {
           const mime = await (mimePromise ??= output.getMimeType());
+          if (destroyed || pumpToken !== myToken) return;
           sink = new MseSink({ mime, video });
           await sink.ready();
+          if (destroyed || pumpToken !== myToken) return;
           // Apply deferred seek + autoPlay for the initial start.
           if (pendingStartTime > 0) {
             sink.invalidate(pendingStartTime);
@@ -148,10 +157,10 @@ export async function createRemuxPipeline(
           sink.setPlayOnSeek(pendingAutoPlay);
         }
         // Backpressure: wait for the SourceBuffer append queue to drain.
-        while (sink && !destroyed && (sink.queueLength() > 10 || sink.bufferedAhead() > 60 || sink.totalBuffered() > 120)) {
+        while (sink && !destroyed && pumpToken === myToken && (sink.queueLength() > 10 || sink.bufferedAhead() > 60 || sink.totalBuffered() > 120)) {
           await new Promise((r) => setTimeout(r, 500));
         }
-        if (destroyed) return;
+        if (destroyed || pumpToken !== myToken) return;
         sink.append(chunk.data);
         stats.bytesWritten += chunk.data.byteLength;
         stats.fragments++;

@@ -4,6 +4,107 @@ All notable changes to **avbridge.js** are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.13.0]
+
+Post-seek fast-forward fix on the fallback path, plus seekbar UX
+improvements and a small new API for hosts embedding the player in
+swipe-driven UIs.
+
+### Fixed
+
+- **Post-seek "fast-forward" on MPEG-4 ASP + MP3 AVIs** (the headline
+  fix). After seeking deep into a long AVI, ~1–2 s of visibly
+  fast-forwarded video preceded normal playback. Root cause: the
+  fallback decoder's synthetic-PTS counter was reset to the user's
+  requested seek time, so the first NOPTS frame post-seek (typically
+  the keyframe libav landed on, ~4–8 s before target) got stamped
+  with the seek target's PTS. Every libav-pts frame after that was
+  REGRESSED-DROP'd because the synthetic anchor was ahead of real
+  content. The renderer painted the ~1-in-3 mis-labeled frames at
+  audio rate, producing 2.4–3× content rate on screen until the
+  synthetic counter caught up. Rewrote the content clock as
+  **sync-on-every-valid-pts / step-on-NOPTS** with no fallback to
+  seekTarget — labels now match real content within one frame at all
+  times. See `docs/dev/POSTMORTEMS.md` (2026-06-01) for the full
+  diagnostic arc, including the two epistemic traps that delayed
+  triage by hours.
+- **Cold-start opening loses 1–2 frames.** First emitted keyframe at
+  `t=0` was being discarded as pre-anchor NOPTS, so the first paint
+  landed at content ~80 ms instead of 0. Special-cased
+  `seekTarget === 0`: anchor `lastContentUs = 0` on the
+  `f.key_frame === 1` frame directly. Strictly branched so it can't
+  touch the seek path.
+- **Seekbar pointer events bubble to host gesture recognizers.**
+  Touches that start on the player chrome (seek bar, buttons,
+  settings menu, overlay play button) now stop propagation on
+  `pointerdown` / `pointermove` / `pointerup` / `pointercancel`, so
+  a host page that wraps the player in a TikTok-style vertical
+  pager won't latch its swipe handler on seek interactions.
+- **Hybrid strategy audio uses packet PTS** instead of the synthetic
+  counter, matching the fallback strategy's audio path (see v2.12.2
+  refactor). `decodeAudioBatch` now captures `packetPtsSec` before
+  decode and routes per-frame; eliminates a class of post-seek
+  audio-scheduling drift that affected hybrid playback the same way
+  it affected fallback.
+- **Remux pipeline drops stale writes after seek.** Each output's
+  `write` callback now captures the pump token at creation time and
+  drops any in-flight chunk whose token has been bumped by a
+  subsequent seek. Without this, fragments from the pre-seek output
+  could append to the SourceBuffer at their original timestamps,
+  the deferred seek would apply against the wrong buffered range,
+  and playback would snap to the end of the stale range.
+
+### Added
+
+- **`AvbridgePlayerElement.isPlayerChromeEvent(event)`** static
+  helper. Returns `true` if a DOM event originated from the player's
+  interactive chrome (works across the shadow boundary via
+  `composedPath()`). Use this in **capture-phase** gesture
+  recognizers — capture-phase listeners run before the player's own
+  handlers can stop propagation, so they need to check the path
+  themselves. See README → `<avbridge-player>` → "Embedding inside a
+  swipe gesture".
+
+### Changed
+
+- **Seekbar drag model** switches on `(pointer: coarse)` instead of
+  bar width. Touch devices (coarse) now get **relative-drag
+  scrubbing** — initial tap doesn't move the thumb, finger Δx maps to
+  Δt added to the time at pointerdown. Mouse/trackpad (fine) keep
+  **absolute-position** seeking — thumb jumps under the cursor on
+  tap, follows pointer on drag. Both modes commit live during drag
+  (throttled to ~4 Hz so the decoder pump isn't overwhelmed) and
+  once more on pointerup. Removes the 400 px `SCRUB_WIDTH_THRESHOLD`
+  — width was the wrong signal for distinguishing
+  precise-pointer-input vs imprecise-finger-input.
+- **Diagnostic logging gated behind `globalThis.AVBRIDGE_DEBUG`.**
+  Per-packet (`[DIAG-PKT]`), per-frame (`[DIAG-FRAME]`), per-paint
+  (`[TRACE] PAINT`), and per-audio-chunk (`[TRACE-AUD]`) trace lines
+  are silent in normal use. Degraded-state warnings
+  (`first valid raw pts ≥ seek target`, `LEGACY (no PTS)`,
+  `REBASE anchor`) stay unconditional — those signal real problems.
+- **Pre-roll re-enabled** with a structural safety guarantee. The
+  renderer paints at most ONE frame (the head of the queue, held
+  static) during the post-flush gate-wait window. Because the
+  decoder fix discards pre-target frames before they reach the
+  renderer queue, the pre-roll frame is now guaranteed to be a
+  near-target frame — the previous regression artifact (painting the
+  keyframe-to-target preroll stream) is structurally impossible.
+
+### Internal
+
+- Replaced the fallback decoder's `sanitizeFrameTimestamp` call-site
+  with an inline anchor-and-step block that never lies about content
+  position. Synthetic counter no longer initialized to anything
+  derived from the user's click — unanchored on seek, established at
+  the first valid libav pts, extended by `frameStep` on NOPTS,
+  re-synced to truth on every valid pts.
+- Removed dead debug scaffolding from `video-renderer.ts`:
+  `BREAK_AT_PAINT_AFTER_FLUSH` constant, `paintsSinceFlush` counter,
+  unused `paintHistory` ring-buffer field, the `debugger` statement
+  that would trap users on paint #10 post-seek when
+  `AVBRIDGE_DEBUG=true`.
+
 ## [2.12.1]
 
 DivX/Xvid AVI playback reliability — four latent bugs fixed. Content

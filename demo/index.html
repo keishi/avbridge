@@ -72,6 +72,15 @@
         <label>Subtitle: <input id="subs" type="file" accept=".srt,.vtt" /></label>
       </div>
 
+      <!-- Jump to a specific timestamp. Originally added to reproduce a
+           post-seek fast-forward bug (POSTMORTEMS 2026-06-01); kept as a
+           handy regression aid for deep-seek issues. -->
+      <div class="picker" style="gap:8px;align-items:center;">
+        <label>Jump to (s): <input id="repro-time" type="number" step="0.001" value="922" style="width:120px;" /></label>
+        <button id="repro-btn" type="button">Seek</button>
+        <span id="repro-hint" style="opacity:0.7;font-size:12px;">Saves the last value so you can re-seek to the same spot after reload.</span>
+      </div>
+
       <avbridge-subtitles for="player" style="max-height:200px;border-radius:8px;margin-top:8px;"></avbridge-subtitles>
 
       <p id="error" class="err"></p>

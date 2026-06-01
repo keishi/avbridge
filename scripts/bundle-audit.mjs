@@ -48,13 +48,23 @@ const SCENARIOS = [
     name: "everything",
     description: "import * — full library, baseline",
     code: `import * as avbridge from "${ESM_PATH}"; export { avbridge };`,
-    maxEagerGzip: 25_000,
+    // v2.13.0 raised 25_000 → 27_500 for the fallback content-clock
+    // invariant (sync-on-every-valid-pts / step-on-NOPTS), gated
+    // post-seek diagnostic logging that's compiled in but only fires
+    // under AVBRIDGE_DEBUG, the new `isPlayerChromeEvent` helper, and
+    // the relative-drag scrub-mode rewrite. See POSTMORTEMS.md
+    // 2026-06-01 for the fast-forward fix that motivated most of it.
+    maxEagerGzip: 27_500,
   },
   {
     name: "createPlayer-only",
     description: "import { createPlayer } — full player",
     code: `import { createPlayer } from "${ESM_PATH}"; export { createPlayer };`,
-    maxEagerGzip: 20_000,
+    // v2.12.2 raised from 19_500 → 20_500 for the PTS-based audio
+    // scheduling refactor — see element-only note below.
+    // v2.13.0 raised 20_500 → 23_000 for the content-clock fix —
+    // see "everything" note above.
+    maxEagerGzip: 23_000,
   },
   {
     name: "remux-only",
@@ -86,7 +96,9 @@ const SCENARIOS = [
     name: "core-no-element",
     description: "import everything from core — element code MUST be absent",
     code: `import * as a from "${ESM_PATH}"; export { a };`,
-    maxEagerGzip: 25_000,
+    // v2.13.0 raised 25_000 → 27_500 — see "everything" note above
+    // (same code paths in the bundle).
+    maxEagerGzip: 27_500,
     forbidInEntry: ["customElements.define", '"avbridge-video"', "AvbridgeVideoElement"],
   },
   {
@@ -109,7 +121,18 @@ const SCENARIOS = [
     // These surfaced the synthetic-PTS stutter and post-seek out-of-order
     // bugs that v2.12.0 fixed — the panel paid for itself during that
     // investigation. Net gzip cost ~1 KB.
-    maxEagerGzip: 24_000,
+    // v2.12.2 raised the limit from 23_500 → 24_500 for the PTS-based
+    // audio scheduling refactor: AudioOutput.schedule accepts a ptsSec
+    // arg and routes pre-target chunks to a fast-drop path, the decoder
+    // captures packet PTS for audio frames, and the renderer's enqueue
+    // discards beyond `queueHighWater` to preserve decoder reference
+    // state during post-seek catch-up. See POSTMORTEMS.md 2026-05-31.
+    // v2.13.0 raised the limit from 24_500 → 26_500 for the fallback
+    // content-clock invariant (sync-on-every-valid-pts / step-on-NOPTS),
+    // gated post-seek diagnostic logging, the new `isPlayerChromeEvent`
+    // static helper, the relative-drag scrub-mode rewrite, and seekbar
+    // event-propagation control. See POSTMORTEMS.md 2026-06-01.
+    maxEagerGzip: 26_500,
     requireInEntry: ["customElements"],
   },
 ];

@@ -72,6 +72,44 @@ type FitMode = (typeof FIT_MODES)[number];
 export class AvbridgePlayerElement extends HTMLElement {
   static readonly observedAttributes = [...PROXY_ATTRIBUTES, ...PLAYER_ATTRIBUTES];
 
+  /**
+   * Returns `true` if a DOM event originated from one of the player's
+   * **interactive chrome elements** (seek bar, control buttons, settings
+   * menu, overlay play button) rather than the bare video surface.
+   *
+   * This is the escape hatch for host pages that wrap the player in a
+   * gesture recognizer (e.g. TikTok-style vertical-swipe pager). For
+   * bubble-phase listeners the player's own handlers already call
+   * `stopPropagation()` on chrome interactions — but **capture-phase**
+   * listeners run *before* the player's handlers, so they need to check
+   * the event's path themselves and bail. This helper does that check
+   * via `composedPath()`, which traverses shadow boundaries correctly.
+   *
+   * Returns `false` for events on the bare video surface — host pages
+   * remain free to claim those for their own gestures (e.g. swipe-to-pan
+   * to the next video). Returns `false` for events that never hit a
+   * player at all.
+   *
+   * @example
+   * // TikTok-style vertical swipe on the document, capture phase:
+   * document.addEventListener("pointerdown", (e) => {
+   *   if (AvbridgePlayerElement.isPlayerChromeEvent(e)) return;
+   *   startSwipeGesture(e);
+   * }, { capture: true });
+   */
+  static isPlayerChromeEvent(event: Event): boolean {
+    // Mirrors the selector used by the player's internal tap-target
+    // gate (see `_onPlayerSurfaceClick` and friends): anything inside
+    // these regions is "chrome", everything else is the bare video.
+    const CHROME_SELECTOR = ".avp-controls, .avp-settings, .avp-overlay-btn";
+    for (const node of event.composedPath()) {
+      if (node instanceof HTMLElement && node.matches?.(CHROME_SELECTOR)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   // ── Internal DOM refs ──────────────────────────────────────────────────
 
   private _video!: AvbridgeVideoElement;
@@ -104,6 +142,11 @@ export class AvbridgePlayerElement extends HTMLElement {
   private _activeAudioTrackId: number | null = null;
   private _activeSubtitleTrackId: number | null = null;
   private _userSeeking = false;
+  /** Last seek target the user committed. The thumb stays here (and
+   *  `_updateTime` skips updating from `timeupdate`) until the underlying
+   *  `currentTime` actually catches up — otherwise the thumb visibly snaps
+   *  back to the pre-seek position while the remux pipeline rebuilds. */
+  private _pendingSeekTarget: number | null = null;
   private _holdTimer: ReturnType<typeof setTimeout> | null = null;
   private _holdSpeedActive = false;
   private _savedPlaybackRate = 1;
@@ -233,7 +276,10 @@ export class AvbridgePlayerElement extends HTMLElement {
     }
 
     // State tracking
-    on(this._video, "loadstart", () => this._setState("loading"));
+    on(this._video, "loadstart", () => {
+      this._pendingSeekTarget = null;
+      this._setState("loading");
+    });
     on(this._video, "ready", () => {
       this._setState(this._video.paused ? "paused" : "playing");
       this._seekInput.max = String(this._video.duration || 0);
@@ -430,7 +476,9 @@ export class AvbridgePlayerElement extends HTMLElement {
   }
 
   private _onSeekCommit(): void {
-    this._video.currentTime = Number(this._seekInput.value);
+    const target = Number(this._seekInput.value);
+    this._pendingSeekTarget = target;
+    this._video.currentTime = target;
     this._userSeeking = false;
   }
 
@@ -442,49 +490,87 @@ export class AvbridgePlayerElement extends HTMLElement {
     return frac * (this._video.duration || 0);
   }
 
-  /** Seekbar width below which drag-to-scrub seeks in real-time (vs
-   *  preview-only). On narrow bars precise positioning is hard, so
-   *  immediate video feedback is more useful than a time tooltip. */
-  private static readonly SCRUB_WIDTH_THRESHOLD = 400;
-
   private _onSeekPointerDown(e: PointerEvent): void {
     // Ignore synthetic clicks originating from the input's own handling
     if (e.button !== 0 && e.pointerType === "mouse") return;
     e.preventDefault();
+    // Consume the event so host pages can layer the player inside a
+    // swipe-driven UI (e.g. TikTok-style vertical pager) without the
+    // pointerdown bubbling out and latching their gesture recognizer.
+    // The seekbar's CSS sets `touch-action: none` to suppress native
+    // browser pan/zoom — this complements that on the JS side, since
+    // swipe handlers built on PointerEvents wouldn't honor touch-action.
+    e.stopPropagation();
     this._userSeeking = true;
     const seekBar = this.shadowRoot!.querySelector(".avp-seek") as HTMLElement;
     seekBar.setPointerCapture(e.pointerId);
     seekBar.setAttribute("data-seeking", "");
 
-    // Decide scrub mode based on physical width.
-    const scrubMode = seekBar.getBoundingClientRect().width < AvbridgePlayerElement.SCRUB_WIDTH_THRESHOLD;
-    let lastScrubCommit = 0;
+    // Two seek modes, picked by `(pointer: coarse)`:
+    //   - **fine** (mouse / trackpad / stylus): absolute mapping —
+    //     pointer X maps directly to seek time, thumb jumps under
+    //     cursor. Standard desktop YouTube behavior.
+    //   - **coarse** (touch): relative drag — initial tap doesn't move
+    //     the thumb; finger Δx maps to a Δt added to the time at
+    //     pointerdown. Standard YouTube-mobile behavior; matters because
+    //     finger positioning is too imprecise for absolute on a small bar.
+    // Both modes commit live during drag (throttled to ~4 Hz so we don't
+    // overwhelm the seek pipeline — every commit restarts the decoder
+    // pump on canvas strategies) and once more on pointerup.
+    const coarse = typeof matchMedia !== "undefined"
+      && matchMedia("(pointer: coarse)").matches;
+    const startTime = coarse ? (this._video.currentTime || 0) : 0;
+    const startClientX = e.clientX;
+    let lastCommit = 0;
 
-    const initial = this._timeFromSeekPointer(e.clientX);
-    this._seekInput.value = String(initial);
-    this._onSeekInput();
-    this._updateSeekTooltip(e.clientX);
-    if (scrubMode) this._onSeekCommit();
+    const timeAt = (clientX: number): number => {
+      if (coarse) {
+        const rect = seekBar.getBoundingClientRect();
+        const dx = clientX - startClientX;
+        const dt = (dx / rect.width) * (this._video.duration || 0);
+        return Math.max(0, Math.min(this._video.duration || 0, startTime + dt));
+      }
+      return this._timeFromSeekPointer(clientX);
+    };
+
+    const showTooltip = (t: number, clientX: number): void => {
+      if (coarse) this._updateSeekTooltipAtTime(t);
+      else this._updateSeekTooltip(clientX);
+    };
+
+    // Fine mode: tap commits immediately (thumb jumps under pointer).
+    // Coarse mode: tap parks at the current time; only drag moves it.
+    if (!coarse) {
+      const initial = timeAt(e.clientX);
+      this._seekInput.value = String(initial);
+      this._onSeekInput();
+      showTooltip(initial, e.clientX);
+      this._onSeekCommit();
+      this._userSeeking = true; // commit clears it; we're still seeking
+    } else {
+      showTooltip(startTime, e.clientX);
+    }
 
     const onMove = (ev: PointerEvent) => {
-      const t = this._timeFromSeekPointer(ev.clientX);
+      // Belt-and-suspenders for the host's swipe handler. Pointer capture
+      // changes the *target* of subsequent pointermove events to seekBar,
+      // but they still bubble through ancestors — a swipe listener
+      // attached to document/window would otherwise see every drag tick.
+      ev.stopPropagation();
+      const t = timeAt(ev.clientX);
       this._seekInput.value = String(t);
       this._onSeekInput();
-      this._updateSeekTooltip(ev.clientX);
-      // In scrub mode, commit seeks throttled to ~4 Hz so we don't
-      // overwhelm the seek pipeline (especially on canvas strategies
-      // where each seek restarts the decoder pump).
-      if (scrubMode) {
-        const now = performance.now();
-        if (now - lastScrubCommit > 250) {
-          lastScrubCommit = now;
-          this._onSeekCommit();
-          this._userSeeking = true; // keep seeking flag live
-        }
+      showTooltip(t, ev.clientX);
+      const now = performance.now();
+      if (now - lastCommit > 250) {
+        lastCommit = now;
+        this._onSeekCommit();
+        this._userSeeking = true;
       }
     };
     const onUp = (ev: PointerEvent) => {
-      const t = this._timeFromSeekPointer(ev.clientX);
+      ev.stopPropagation();
+      const t = timeAt(ev.clientX);
       this._seekInput.value = String(t);
       this._onSeekCommit();
       this._seekInput.focus();
@@ -511,6 +597,16 @@ export class AvbridgePlayerElement extends HTMLElement {
     this._seekTooltip.style.left = `${frac * 100}%`;
   }
 
+  /** Position the tooltip over a specific time (vs. pointer X). Used by
+   *  relative-drag scrub on coarse pointers, where the displayed time
+   *  is decoupled from the finger position. */
+  private _updateSeekTooltipAtTime(t: number): void {
+    const dur = this._video.duration || 0;
+    const frac = dur > 0 ? Math.max(0, Math.min(1, t / dur)) : 0;
+    this._seekTooltip.textContent = formatTime(t);
+    this._seekTooltip.style.left = `${frac * 100}%`;
+  }
+
   private _updateSeekVisuals(t: number): void {
     const dur = this._video.duration || 0;
     const pct = dur > 0 ? (t / dur) * 100 : 0;
@@ -526,6 +622,18 @@ export class AvbridgePlayerElement extends HTMLElement {
     if (this._userSeeking) return;
     const t = this._video.currentTime;
     const d = this._video.duration;
+    // While a committed seek is still settling, keep the thumb at the
+    // target so it doesn't snap back to the pre-seek position. Clear once
+    // currentTime has landed within 0.5s of the target.
+    if (this._pendingSeekTarget !== null) {
+      if (Math.abs(t - this._pendingSeekTarget) < 0.5) {
+        this._pendingSeekTarget = null;
+      } else {
+        this._timeDisplay.textContent = `${formatTime(this._pendingSeekTarget)} / ${formatTime(d)}`;
+        this._updateBuffered();
+        return;
+      }
+    }
     this._seekInput.value = String(t);
     this._updateSeekVisuals(t);
     this._timeDisplay.textContent = `${formatTime(t)} / ${formatTime(d)}`;

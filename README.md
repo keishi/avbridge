@@ -431,6 +431,39 @@ attribute mirroring the controls auto-hide state — useful if slotted
 buttons need to drive JS behavior (focus, announcements) in sync with
 the fade, not just CSS opacity.
 
+#### Embedding inside a swipe gesture (TikTok-style pagers, etc.)
+
+When `<avbridge-player>` is nested inside a host UI that recognizes
+swipe gestures (vertical pager, drawer, carousel), pointer events
+that start on the player chrome — seek bar, buttons, settings menu,
+overlay play button — should NOT also latch the host's gesture
+recognizer. The player handles this in two layers:
+
+**Bubble-phase listeners** (the default) need no action on your
+side. The player calls `stopPropagation()` on `pointerdown`,
+`pointermove`, `pointerup`, and `pointercancel` for chrome
+interactions, so they never bubble out to the host.
+
+**Capture-phase listeners** (`{ capture: true }`) run *before* the
+player's handlers, so `stopPropagation()` can't help. Check the
+event against the static helper instead:
+
+```ts
+import { AvbridgePlayerElement } from "avbridge/player-element";
+
+document.addEventListener("pointerdown", (e) => {
+  if (AvbridgePlayerElement.isPlayerChromeEvent(e)) return;
+  startSwipeGesture(e);
+}, { capture: true });
+```
+
+`isPlayerChromeEvent(event)` returns `true` only for events whose
+`composedPath()` includes the player's interactive chrome (works
+across the shadow boundary). Events on the bare video surface return
+`false` — the host page remains free to claim those for its own
+gestures (e.g. swipe-to-next-video). Events that didn't hit a player
+at all return `false`.
+
 This is a second tsup entry (`dist/element-browser.js`) that inlines
 mediabunny + libavjs-webcodecs-bridge into a single ~1.3 MB file with
 zero bare specifiers at runtime. Perfect for self-hosted tools or static

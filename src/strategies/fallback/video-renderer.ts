@@ -38,7 +38,21 @@ export class VideoRenderer {
   private framesPainted = 0;
   private framesDroppedLate = 0;
   private framesDroppedOverflow = 0;
+  /** True once the head frame has been painted as a pre-roll poster
+   *  since the last flush. Used to ensure pre-roll paints exactly one
+   *  frame (held static) during the post-seek discard window. */
   private prerolled = false;
+  /** PTS (µs) of the most recently painted frame. Used as the calibration
+   *  reference on the first post-flush snap: the pre-roll path paints one
+   *  frame *before* PTS-based playback starts, so the queue head's PTS at
+   *  first PTS-based paint is the *next* frame, off by one frameDur from
+   *  the actually-displayed frame. Calibrating against the painted frame
+   *  instead of the queue head removes that one-frame offset and yields
+   *  calib ≈ 0 instead of +frameDur. */
+  private lastPaintedPtsUs = 0;
+  private hasLastPaintedPts = false;
+  /** Audio-clock reading (ms) at the previous paint, for overlay Δaud. */
+  private lastPaintAudMs = 0;
   /** Wall-clock time of the last paint, in ms (performance.now()). */
   private lastPaintWall = 0;
   /** Minimum ms between paints — paces video at roughly source fps. */
@@ -163,13 +177,17 @@ export class VideoRenderer {
   }
 
   /**
-   * Soft cap for decoder backpressure. The decoder pump throttles when
-   * `queueDepth() >= queueHighWater`. Set high enough that normal decode
-   * bursts don't trigger the renderer's overflow-drop loop (which runs at
-   * every paint), but low enough that the decoder doesn't run unboundedly
-   * ahead. The hard cap in `enqueue()` is 64.
+   * Cap the decoder may fill the queue up to. Used by the decoder's
+   * enqueue-side discard logic (it closes new frames instead of pushing
+   * them when this is reached). Sized so a long post-seek catch-up
+   * fits — the decoder produces frames at PTS T_kf onwards rapidly
+   * while the demuxer is chewing through pre-target audio; if the
+   * queue can hold the whole post-seek burst, the renderer plays
+   * smoothly from pre-roll without a frozen-video gap when audio.start
+   * fires. At ~340 KB per SD frame the cap is ~85 MB peak; at HD it's
+   * larger but still bounded.
    */
-  readonly queueHighWater = 30;
+  readonly queueHighWater = 256;
 
   enqueue(frame: VideoFrame): void {
     if (this.destroyed) {
@@ -181,10 +199,12 @@ export class VideoRenderer {
     if (this.queue.length === 1 && this.framesPainted === 0) {
       this.resolveFirstFrame();
     }
-    // Hard cap. Should rarely trigger because the decoder backs off at
-    // queueHighWater (30) and the drift correction trims gently. This is
-    // the last-resort defense against runaway producers.
-    while (this.queue.length > 60) {
+    // Hard cap. The decoder's enqueue-side discard at `queueHighWater`
+    // is the primary defense; this `+8` margin is just safety for a
+    // racy producer. Drops the OLDEST frames, which during catch-up
+    // would mean losing the frames closest to the seek target — so the
+    // decoder should be tuned to never reach this.
+    while (this.queue.length > this.queueHighWater + 8) {
       this.queue.shift()?.close();
       this.framesDroppedOverflow++;
     }
@@ -283,14 +303,27 @@ export class VideoRenderer {
 
     const playing = this.clock.isPlaying();
 
-    // Pre-roll: paint the very first frame as a poster while audio buffers.
+    // Pre-roll: paint the head frame ONCE as a poster while audio buffers.
+    //
+    // Safety invariant (load-bearing): with the decoder.ts content-clock
+    // fix (POSTMORTEMS 2026-06-01), pre-target frames are discarded at
+    // the decoder/enqueue boundary, so queue[0] here is guaranteed to be
+    // a near-target frame — never the keyframe-to-target preroll sequence
+    // that previously caused the post-seek fast-forward when painted.
+    //
+    // Paint at most ONE frame and hold it (gate via `prerolled`). Do NOT
+    // shift the queue: when audio unfreezes and `playing` becomes true,
+    // the regular PTS loop below will paint this same frame again and
+    // shift it out. That second paint is a no-op visually (same pixels)
+    // so there's no flicker.
+    //
+    // If the queue is empty (decoder still grinding through the post-seek
+    // discard window), just return — last pre-flush frame stays on canvas
+    // as the freeze poster, which is the safe fallback.
     if (!playing) {
-      if (!this.prerolled) {
-        const head = this.queue.shift()!;
-        this.paint(head);
-        head.close();
+      if (!this.prerolled && this.queue.length > 0) {
         this.prerolled = true;
-        this.lastPaintWall = performance.now();
+        this.paint(this.queue[0]);
       }
       return;
     }
@@ -312,16 +345,81 @@ export class VideoRenderer {
       // plus a small rate drift (~7ms/s). We snap the offset on first paint
       // and re-snap every 10 seconds. Between snaps, max drift is ~70ms
       // (under 2 frames at 24fps, below lip-sync perception threshold).
+      //
+      // Two cases for the *first* snap after flush:
+      //   - Anchor `rawAudioNowUs` against `clock.now()` (default for the
+      //     periodic 10s re-snap) drifts with the audio clock — including
+      //     decode-stall lag accumulated between `audio.start()` and the
+      //     first frame's arrival. On a slow seek where the first frame
+      //     lands 1–2s after audio resumed, this captures the lag as a
+      //     permanent offset and the video stays that far behind audio.
+      //   - For the *first* snap post-flush we instead use the audio's
+      //     **anchor time** (`mediaTimeOfAnchor`, == the seek target / 0
+      //     on cold start). That gives `headTs − seekTarget` ≈ keyframe
+      //     offset (usually < 100ms), independent of decode delay.
       const wallNow = performance.now();
-      if (!this.ptsCalibrated || wallNow - this.lastCalibrationWall > 10_000) {
-        this.ptsCalibrationUs = headTs - rawAudioNowUs;
+      // First snap after flush/cold-start anchors against the audio's
+      // *master-clock reference* (= `mediaTimeOfAnchor`, == the rebased
+      // audio first-chunk PTS), NOT `clock.now()`. `clock.now()` includes
+      // wall-clock-drifted elapsed time between `audio.start()` and the
+      // first paint — on a slow seek where the first frame lands 1-2 s
+      // after audio resumed, that decode delay gets baked into the
+      // calibration as a permanent video-lag offset. See POSTMORTEMS.md
+      // (2026-04-13). The periodic re-snap continues to use `rawAudioNow`
+      // as the original design intended — a stateless independent snap
+      // every 10 s bounds drift to ~70 ms at the documented ~7 ms/s rate,
+      // below the lip-sync perception threshold. Do *not* introduce a
+      // smoothed / EMA / bounded-delta variant here: the measured offset
+      // includes the current calibration, which produces a feedback loop
+      // (postmortem 2026-04-13, hypothesis 3).
+      if (!this.ptsCalibrated) {
+        const anchorUs = (this.clock.anchorTime?.() ?? this.clock.now()) * 1_000_000;
+        // Reference frame for calibration: prefer the pre-rolled frame's
+        // PTS over the queue head, since the pre-rolled frame is what the
+        // user is *actually looking at* the moment audio starts. The queue
+        // head at this point is the NEXT frame (PTS == prerolled + frameDur),
+        // and calibrating against it bakes that one-frame offset into the
+        // calibration permanently. With the painted-frame reference, calib
+        // ≈ 0 when video keyframe lands at the seek target.
+        const referencePtsUs = this.hasLastPaintedPts ? this.lastPaintedPtsUs : headTs;
+        this.ptsCalibrationUs = referencePtsUs - anchorUs;
         this.ptsCalibrated = true;
         this.lastCalibrationWall = wallNow;
+        if (isDebug()) {
+          // eslint-disable-next-line no-console
+          console.log(
+            `[avbridge:renderer] CALIB-FIRST audioAnchor=${(anchorUs / 1000).toFixed(1)}ms ` +
+            `prerolledPTS=${this.hasLastPaintedPts ? (this.lastPaintedPtsUs / 1000).toFixed(1) : "n/a"}ms ` +
+            `queueHeadPTS=${(headTs / 1000).toFixed(1)}ms ` +
+            `rawAudioNow=${(rawAudioNowUs / 1000).toFixed(1)}ms ` +
+            `→ calib=${(this.ptsCalibrationUs / 1000).toFixed(1)}ms`,
+          );
+        }
+      } else if (wallNow - this.lastCalibrationWall > 10_000) {
+        const oldCalib = this.ptsCalibrationUs;
+        this.ptsCalibrationUs = headTs - rawAudioNowUs;
+        this.lastCalibrationWall = wallNow;
+        if (isDebug()) {
+          // eslint-disable-next-line no-console
+          console.log(
+            `[avbridge:renderer] CALIB-RESNAP ` +
+            `headPTS=${(headTs / 1000).toFixed(1)}ms rawAudioNow=${(rawAudioNowUs / 1000).toFixed(1)}ms ` +
+            `calib ${(oldCalib / 1000).toFixed(1)}ms → ${(this.ptsCalibrationUs / 1000).toFixed(1)}ms ` +
+            `(Δ=${((this.ptsCalibrationUs - oldCalib) / 1000).toFixed(1)}ms after 10s)`,
+          );
+        }
       }
 
       const audioNowUs = rawAudioNowUs + this.ptsCalibrationUs;
-      const frameDurationUs = this.paintIntervalMs * 1000;
-      const deadlineUs = audioNowUs + frameDurationUs;
+      // Paint the frame whose PTS is at or just before audioNow. A frame
+      // at PTS P should be the displayed frame from the moment audio
+      // reaches P, *not* from P − frameDur. The previous code used
+      // `deadline = audioNow + frameDur`, which painted frames up to one
+      // source-frame ahead of audio — a steady ~40 ms video-leads-audio
+      // offset that the user perceived as "fast-forward then normal."
+      // With `deadline = audioNow`, paints land exactly at the frame's
+      // start of display interval; lip sync matches.
+      const deadlineUs = audioNowUs;
 
       let bestIdx = -1;
       for (let i = 0; i < this.queue.length; i++) {
@@ -353,28 +451,26 @@ export class VideoRenderer {
         return;
       }
 
-      // Only drop frames that are more than 2 frame-durations behind.
-      // Diagnostic escape hatch: `globalThis.AVBRIDGE_RELAX_DROP = true`
-      // pushes the threshold so far back that frames are effectively
-      // never dropped as late. The display will run behind the audio
-      // clock but won't stutter from drop bursts. Useful for isolating
-      // "is the problem decode throughput or drop policy?".
+      // Audio-sync skip: when `bestIdx > 0` there are multiple frames in
+      // the queue whose PTS ≤ deadline. Drop everything before `bestIdx`
+      // and paint the latest paintable frame. See POSTMORTEMS.md
+      // 2026-05-31 coda for the rationale.
       const _relaxDrop =
         (globalThis as { AVBRIDGE_RELAX_DROP?: boolean }).AVBRIDGE_RELAX_DROP === true;
-      const dropThresholdUs = _relaxDrop
-        ? audioNowUs - 60 * 1_000_000 /* 60 s */
-        : audioNowUs - frameDurationUs * 2;
       let dropped = 0;
-      while (bestIdx > 0) {
-        const ts = this.queue[0].timestamp ?? 0;
-        if (ts < dropThresholdUs) {
+      const initialBestIdx = bestIdx;
+      if (!_relaxDrop) {
+        while (bestIdx > 0) {
           this.queue.shift()?.close();
           this.framesDroppedLate++;
           bestIdx--;
           dropped++;
-        } else {
-          break;
         }
+      }
+      const paintTs = this.queue[0]?.timestamp ?? 0;
+      if (isDebug()) {
+        // eslint-disable-next-line no-console
+        console.log(`[TRACE] PAINT bestIdx_initial=${initialBestIdx} dropped=${dropped} paintPts=${(paintTs / 1000).toFixed(1)}ms audioNow=${(audioNowUs / 1000).toFixed(1)}ms deadline=${(deadlineUs / 1000).toFixed(1)}ms queueLen=${this.queue.length} wall=${performance.now().toFixed(0)}`);
       }
 
       this.ticksPainted++;
@@ -423,6 +519,51 @@ export class VideoRenderer {
     }
     try {
       this.ctx.drawImage(frame, 0, 0, this.canvas.width, this.canvas.height);
+
+      // Debug overlay (gated on AVBRIDGE_DEBUG). Draws frame info on top
+      // of the painted frame so the user can SEE what's actually
+      // displayed and at what rate. Three time domains:
+      //   pts  — source content time (from frame.timestamp)
+      //   aud  — audio media clock (clock.now() × 1000)
+      //   wall — performance.now() (monotonic browser clock)
+      // Plus the per-paint deltas. If `Δpts > Δwall` sustained across
+      // multiple frames, that's real fast-forward; if it alternates
+      // 33/50ms on a 25fps source, that's 3:2 pulldown judder. (See
+      // POSTMORTEMS 2026-06-01 for why this overlay was load-bearing
+      // when diagnosing the post-seek fast-forward.)
+      if (isDebug()) {
+        const wallNow = performance.now();
+        const audNowMs = this.clock.now() * 1000;
+        const ptsMs = (frame.timestamp ?? 0) / 1000;
+        const dWall = this.lastPaintWall > 0 ? wallNow - this.lastPaintWall : 0;
+        const dAud = this.lastPaintAudMs > 0 ? audNowMs - this.lastPaintAudMs : 0;
+        const dPts = this.hasLastPaintedPts ? ptsMs - this.lastPaintedPtsUs / 1000 : 0;
+        this.ctx.save();
+        this.ctx.font = "bold 18px monospace";
+        const lines = [
+          `#${this.framesPainted + 1}  pts=${ptsMs.toFixed(0)}  aud=${audNowMs.toFixed(0)}  wall=${wallNow.toFixed(0)}`,
+          `Δpts=${dPts.toFixed(0)}  Δaud=${dAud.toFixed(0)}  Δwall=${dWall.toFixed(0)}`,
+        ];
+        const lineHeight = 22;
+        const padTop = 6;
+        const stripH = padTop + lineHeight * lines.length;
+        this.ctx.fillStyle = "rgba(0,0,0,0.7)";
+        this.ctx.fillRect(0, 0, this.canvas.width, stripH);
+        this.ctx.fillStyle = "#0f0";
+        for (let i = 0; i < lines.length; i++) {
+          this.ctx.fillText(lines[i], 8, padTop + lineHeight * (i + 1) - 4);
+        }
+        this.ctx.restore();
+      }
+
+      // Record the just-painted frame's PTS so the next paint's overlay
+      // Δpts and the next CALIB-RESNAP have a reference. Must run
+      // unconditionally — `hasLastPaintedPts`/`lastPaintedPtsUs` are read
+      // by the calibration path in tick() too, not just the overlay.
+      this.lastPaintedPtsUs = frame.timestamp ?? 0;
+      this.hasLastPaintedPts = true;
+      this.lastPaintAudMs = this.clock.now() * 1000;
+
       this.framesPainted++;
     } catch (err) {
       // Log only once so a structurally broken frame format doesn't spam
@@ -439,6 +580,7 @@ export class VideoRenderer {
     const count = this.queue.length;
     while (this.queue.length > 0) this.queue.shift()?.close();
     this.prerolled = false;
+    this.hasLastPaintedPts = false; // calibration ref doesn't carry across seek
     this.ptsCalibrated = false; // recalibrate at new seek position
     this.hasEverEnqueuedSinceFlush = false; // so waitForBuffer() waits for post-flush frames
     if (isDebug() && count > 0) {

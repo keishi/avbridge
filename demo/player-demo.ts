@@ -106,4 +106,29 @@ function init(player: AvbridgePlayerElement): void {
       } catch { /* ignore */ }
     }
   });
+
+  // REPRO button: seek to a fixed time so we can reliably trigger the
+  // post-seek fast-forward bug for diagnosis. Saves the most recent
+  // value in localStorage so it persists across reloads.
+  const reproTimeInput = document.getElementById("repro-time") as HTMLInputElement | null;
+  const reproBtn = document.getElementById("repro-btn") as HTMLButtonElement | null;
+  if (reproTimeInput && reproBtn) {
+    const stored = localStorage.getItem("avbridge.repro.time");
+    if (stored && Number.isFinite(Number(stored))) {
+      reproTimeInput.value = stored;
+    }
+    reproTimeInput.addEventListener("change", () => {
+      localStorage.setItem("avbridge.repro.time", reproTimeInput.value);
+    });
+    reproBtn.addEventListener("click", () => {
+      const t = Number(reproTimeInput.value);
+      if (!Number.isFinite(t)) return;
+      // eslint-disable-next-line no-console
+      console.log(`[REPRO] click — seeking to ${t.toFixed(3)}s`);
+      // Setting currentTime triggers the same seek path as the seek bar.
+      (player as unknown as { currentTime: number }).currentTime = t;
+      // Also ensure we're playing — autoplay may have been blocked.
+      void player.play().catch(() => { /* ignore */ });
+    });
+  }
 }
