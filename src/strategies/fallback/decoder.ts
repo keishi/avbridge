@@ -875,11 +875,11 @@ export async function startDecoder(opts: StartDecoderOptions): Promise<DecoderHa
       destroyed = true;
       pumpToken++;
       try { await pumpRunning; } catch { /* ignore */ }
-      try { if (bsfCtx) await libav.av_bsf_free(bsfCtx); } catch { /* ignore */ }
-      try { if (bsfPkt) await libav.av_packet_free?.(bsfPkt); } catch { /* ignore */ }
+      try { if (bsfCtx) await libav.av_bsf_free_js(bsfCtx); } catch { /* ignore */ }
+      try { if (bsfPkt) await libav.av_packet_free_js(bsfPkt); } catch { /* ignore */ }
       try { if (videoDec) await libav.ff_free_decoder?.(videoDec.c, videoDec.pkt, videoDec.frame); } catch { /* ignore */ }
       try { if (audioDec) await libav.ff_free_decoder?.(audioDec.c, audioDec.pkt, audioDec.frame); } catch { /* ignore */ }
-      try { await libav.av_packet_free?.(readPkt); } catch { /* ignore */ }
+      try { await libav.av_packet_free_js(readPkt); } catch { /* ignore */ }
       try { await libav.avformat_close_input_js(fmt_ctx); } catch { /* ignore */ }
       try { await inputHandle.detach(); } catch { /* ignore */ }
     },
@@ -1162,7 +1162,8 @@ interface LibavRuntime {
   ): Promise<LibavFrame[]>;
   ff_free_decoder?(c: number, pkt: number, frame: number): Promise<void>;
   av_packet_alloc(): Promise<number>;
-  av_packet_free?(pkt: number): Promise<void>;
+  /** Takes the packet; plain av_packet_free takes its address, as FFmpeg's does. */
+  av_packet_free_js(pkt: number): Promise<void>;
   av_seek_frame(
     fmt_ctx: number,
     stream: number,
@@ -1183,7 +1184,8 @@ interface LibavRuntime {
   av_bsf_send_packet(ctx: number, pkt: number): Promise<number>;
   av_bsf_receive_packet(ctx: number, pkt: number): Promise<number>;
   av_bsf_flush?(ctx: number): Promise<void>;
-  av_bsf_free(ctx: number): Promise<void>;
+  /** Takes the context; plain av_bsf_free takes its address. */
+  av_bsf_free_js(ctx: number): Promise<void>;
 
   // Packet copy helpers — bridge JS packet objects to/from C-level pointers
   ff_copyin_packet(pktPtr: number, packet: LibavPacket): Promise<void>;

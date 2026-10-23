@@ -362,7 +362,7 @@ async function doLibavRemux(
   await output.finalize();
 
   // Cleanup libav resources
-  try { await libav.av_packet_free?.(readPkt); } catch { /* ignore */ }
+  try { await libav.av_packet_free_js(readPkt); } catch { /* ignore */ }
   try { await libav.avformat_close_input_js(fmt_ctx); } catch { /* ignore */ }
 
   if (!target.buffer) {
@@ -491,6 +491,7 @@ interface LibavRuntime {
     opts?: { limit?: number },
   ): Promise<[number, Record<number, LibavPacket[]>]>;
   av_packet_alloc(): Promise<number>;
-  av_packet_free?(pkt: number): Promise<void>;
+  /** Takes the packet; plain av_packet_free takes its address, as FFmpeg's does. */
+  av_packet_free_js(pkt: number): Promise<void>;
   avformat_close_input_js(ctx: number): Promise<void>;
 }

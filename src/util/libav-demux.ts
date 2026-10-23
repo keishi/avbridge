@@ -73,7 +73,8 @@ interface LibavRuntime {
     opts?: { limit?: number },
   ): Promise<[number, Record<number, LibavPacket[]>]>;
   av_packet_alloc(): Promise<number>;
-  av_packet_free?(pkt: number): Promise<void>;
+  /** Takes the packet; plain av_packet_free takes its address, as FFmpeg's does. */
+  av_packet_free_js(pkt: number): Promise<void>;
   avformat_close_input_js(ctx: number): Promise<void>;
   f64toi64?(val: number): [number, number];
 }
@@ -180,7 +181,7 @@ export async function openLibavDemux(opts: OpenLibavDemuxOptions): Promise<Libav
 
   async function destroy(): Promise<void> {
     destroyed = true;
-    try { await libav.av_packet_free?.(readPkt); } catch { /* ignore */ }
+    try { await libav.av_packet_free_js(readPkt); } catch { /* ignore */ }
     try { await libav.avformat_close_input_js(fmtCtx); } catch { /* ignore */ }
     try { await inputHandle.detach(); } catch { /* ignore */ }
   }
