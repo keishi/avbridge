@@ -25,6 +25,7 @@
 
 import { loadLibav, type LibavVariant } from "./libav-loader.js";
 import { VideoRenderer } from "./video-renderer.js";
+import { createFrameShedder } from "./shed-frames.js";
 import { AudioOutput } from "./audio-output.js";
 import type { MediaContext } from "../../types.js";
 import { pickLibavVariant } from "./variant-routing.js";
@@ -340,6 +341,15 @@ export async function startDecoder(opts: StartDecoderOptions): Promise<DecoderHa
   const videoTrackInfo = opts.context.videoTracks.find((t) => t.id === videoStream?.index);
   const videoFps = videoTrackInfo?.fps && videoTrackInfo.fps > 0 ? videoTrackInfo.fps : 30;
   const videoFrameStepUs = Math.max(1, Math.round(1_000_000 / videoFps));
+  // The step a frame with no pts takes from the one before it: one frame, or more where frames
+  // were shed from its batch.
+  let nopStepUs = videoFrameStepUs;
+  const shedFrames = createFrameShedder<LibavPacket>({
+    intraOnly: videoTrackInfo?.codec === "mjpeg" || videoTrackInfo?.codec === "dv",
+    fps: videoFps,
+    clock: opts.audio,
+    ptsSec: (pkt) => packetPtsSec(pkt, videoTimeBase),
+  });
 
   // ── Pump loop ─────────────────────────────────────────────────────────
 
@@ -454,8 +464,14 @@ export async function startDecoder(opts: StartDecoderOptions): Promise<DecoderHa
       }
       if (myToken !== pumpToken || destroyed) return;
       if (videoDec && videoPackets && videoPackets.length > 0) {
-        const processed = await applyBSF(videoPackets);
-        await decodeVideoBatch(processed, myToken);
+        const filtered = await applyBSF(videoPackets);
+        const processed = shedFrames(filtered);
+        // A shed frame still takes its place in time: a decoded frame with no pts steps over its
+        // share of the frames shed from its batch, spread across the batch rather than lumped
+        // before its first frame.
+        nopStepUs = processed.length > 0 ? videoFrameStepUs * filtered.length / processed.length : videoFrameStepUs;
+        if (processed.length > 0) await decodeVideoBatch(processed, myToken);
+        nopStepUs = videoFrameStepUs;
       }
 
       packetsRead += (videoPackets?.length ?? 0) + (audioPackets?.length ?? 0);
@@ -725,7 +741,7 @@ export async function startDecoder(opts: StartDecoderOptions): Promise<DecoderHa
         if (rawUs != null) {
           lastContentUs = rawUs; // sync to truth on every valid pts
         } else {
-          lastContentUs += videoFrameStepUs; // extend from last truth
+          lastContentUs += Math.round(nopStepUs); // extend from last truth
           _diagSanFallbackFired = true;
         }
       }
