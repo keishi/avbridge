@@ -76,7 +76,8 @@ export const PLAYER_STYLES = /* css */ `
   border: none;
   color: #fff;
   cursor: pointer;
-  pointer-events: auto;
+  /* Unseen unless idle or paused, so a tap there showed nothing and paused or replayed the video. */
+  pointer-events: none;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -99,6 +100,7 @@ export const PLAYER_STYLES = /* css */ `
 :host([data-state="paused"]) .avp-overlay-btn {
   opacity: 1;
   transform: scale(1);
+  pointer-events: auto;
 }
 
 /* ── Loading spinner ──────────────────────────────────────────────────── */

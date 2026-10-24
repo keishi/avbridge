@@ -365,8 +365,11 @@ export class AvbridgePlayerElement extends HTMLElement {
       }
     });
 
-    // Auto-hide controls
-    on(container, "pointermove", () => this._showControls());
+    // Auto-hide controls. Not on touch: a finger moves as it taps, and that move showed the
+    // controls the tap's toggle hid again a quarter second later.
+    on(container, "pointermove", (e) => {
+      if ((e as PointerEvent).pointerType !== "touch") this._showControls();
+    });
     on(container, "pointerleave", () => this._scheduleHide());
 
     // Touch gestures: hold for 2x speed
@@ -1116,8 +1119,11 @@ export class AvbridgePlayerElement extends HTMLElement {
     if (e.pointerType !== "touch") return;
     this._lastPointerTypeWasTouch = true;
 
-    // Ignore touches on controls — buttons have their own handlers
-    if ((e.target as HTMLElement).closest?.(".avp-controls, .avp-settings, .avp-overlay-btn")) return;
+    // Ignore touches on controls — buttons have their own handlers — but keep the controls up.
+    if ((e.target as HTMLElement).closest?.(".avp-controls, .avp-settings, .avp-overlay-btn")) {
+      this._showControls();
+      return;
+    }
     if (this._isSlottedContentEvent(e)) return;
 
     // If the bottom sheet is open, dismiss it on any touch outside.
