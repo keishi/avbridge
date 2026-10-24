@@ -37,6 +37,8 @@ VARIANT_NAME="avbridge"
 # so the libav loader's `new URL("../vendor/libav", import.meta.url) +
 # /<variant>/libav-<variant>.mjs` path resolves cleanly.
 VENDOR_DIR="$REPO_ROOT/vendor/libav/avbridge"
+# Pinned to what built the committed binary; "latest" moves under us.
+EMSDK_VERSION="${AVBRIDGE_EMSDK_VERSION:-6.0.13}"
 
 # Compiler optimization flags. The libav.js Makefile defaults to OPTFLAGS=-Oz
 # (optimize for *size*), which produces small binaries with the slowest C
@@ -120,6 +122,18 @@ read -r -d '' VARIANT_FRAGMENTS <<'EOF' || true
   "decoder-truehd",
   "decoder-mlp",
   "decoder-theora",
+  "decoder-mjpeg",
+  "parser-mjpeg",
+  "decoder-dvvideo",
+  "decoder-pcm_u8",
+  "decoder-pcm_s16le",
+  "decoder-pcm_s24le",
+  "decoder-pcm_s32le",
+  "decoder-pcm_f32le",
+  "decoder-pcm_mulaw",
+  "decoder-pcm_alaw",
+  "decoder-adpcm_ima_wav",
+  "decoder-adpcm_ms",
 
   "parser-dca",
 
@@ -152,9 +166,9 @@ if [ ! -d "$EMSDK_DIR/.git" ]; then
 fi
 pushd "$EMSDK_DIR" >/dev/null
 if [ ! -f "$EMSDK_DIR/upstream/emscripten/emcc" ] && [ ! -f "$EMSDK_DIR/upstream/emscripten/emcc.py" ]; then
-  log "installing latest emsdk (downloads ~500 MB into $EMSDK_DIR)"
-  ./emsdk install latest
-  ./emsdk activate latest
+  log "installing emsdk $EMSDK_VERSION (downloads ~500 MB into $EMSDK_DIR)"
+  ./emsdk install "$EMSDK_VERSION"
+  ./emsdk activate "$EMSDK_VERSION"
 fi
 # shellcheck disable=SC1091
 source ./emsdk_env.sh

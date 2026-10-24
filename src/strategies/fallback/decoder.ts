@@ -25,6 +25,7 @@
 
 import { loadLibav, type LibavVariant } from "./libav-loader.js";
 import { VideoRenderer } from "./video-renderer.js";
+import { videoFrameInit } from "./video-frame-init.js";
 import { AudioOutput } from "./audio-output.js";
 import type { MediaContext } from "../../types.js";
 import { pickLibavVariant } from "./variant-routing.js";
@@ -781,7 +782,10 @@ export async function startDecoder(opts: StartDecoderOptions): Promise<DecoderHa
         continue;
       }
       try {
-        const vf = bridge.laFrameToVideoFrame(f, { timeBase: [1, 1_000_000] });
+        const init = videoFrameInit(f, _fPts);
+        const vf = init
+          ? new VideoFrame(f.data as BufferSource, init)
+          : bridge.laFrameToVideoFrame(f, { timeBase: [1, 1_000_000] });
         // Renderer-queue backpressure at the enqueue side. Discarding
         // here (rather than throttling the pump on `queueHighWater`)
         // keeps the decoder consuming packets sequentially so its
@@ -1132,6 +1136,8 @@ interface LibavFrame {
   ptshi?: number;
   width?: number;
   height?: number;
+  layout?: PlaneLayout[];
+  sample_aspect_ratio?: [number, number];
 }
 
 interface LibavRuntime {

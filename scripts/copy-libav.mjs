@@ -58,6 +58,7 @@ const SHIPPED_FILENAME_PATTERNS = [
   /^libav-[0-9.]+-[a-z]+\.wasm\.mjs$/,            // non-threaded WASM glue
   /^libav-[0-9.]+-[a-z]+\.wasm\.wasm$/,           // non-threaded WASM binary
   /^libav\.types\.d\.ts$/,                        // type defs (small)
+  /^COPYING\.LGPLv2\.1$/,                         // the LGPL text the binaries ship under
 ];
 
 function shouldShip(filename) {
@@ -87,6 +88,9 @@ for (const v of npmVariants) {
     cpSync(from, join(dst, name));
     copied++;
   }
+  // The npm variant ships no licence text; the one committed beside our build goes with it.
+  const licence = join(vendorLibav, "avbridge", "COPYING.LGPLv2.1");
+  if (existsSync(licence)) cpSync(licence, join(dst, "COPYING.LGPLv2.1"));
   console.log(
     `[copy-libav] vendored ${v.name}: ${copied} file(s) → vendor/libav/${v.name}/ ` +
     `(skipped ${skipped} unused variants)`,

@@ -24,7 +24,11 @@ The fragment list in `scripts/build-libav.sh` enables:
 
 | Demuxers | Decoders (video) | Decoders (audio) | Bitstream filters |
 |---|---|---|---|
-| avi, asf, flv, matroska, mov, mp3, ogg, wav, aac | h264, hevc, mpeg4 (Part 2 / DivX / Xvid), msmpeg4 v1/v2/v3, wmv1/2/3, vc1, mpeg1, mpeg2 | aac, mp3, ac3, eac3, wmav1/v2, wmapro | mpeg4_unpack_bframes |
+| avi, asf, flv, matroska, mov, mp3, ogg, wav, aac | h264, hevc, mpeg4 (Part 2 / DivX / Xvid), msmpeg4 v1/v2/v3, wmv1/2/3, vc1, mpeg1, mpeg2, mjpeg, dvvideo | aac, mp3, ac3, eac3, wmav1/v2, wmapro, pcm (u8, s16/24/32le, f32le, mu-law, A-law), adpcm (IMA WAV, MS) | mpeg4_unpack_bframes |
+
+Motion JPEG with PCM or ADPCM sound is what cameras write (`MVI_*.AVI`). DV decodes, but NTSC DV
+is 4:1:1, which no `VideoFrame` format takes, so a player should refuse it rather than play its
+sound over a black picture.
 
 Plus the parsers needed by each codec, plus `swscale` (video colorspace
 conversion) and `swresample` (audio resampling).
@@ -36,6 +40,19 @@ decoder produces frames with fuzzy timing that the renderer drops as late.
 Output binary is roughly 10–15 MB. It is loaded **lazily** by avbridge — only
 when probe or classification routes a file to it. Users who only ever play
 modern MP4/MKV/WebM never download it.
+
+## The committed build
+
+Built with this script from libav.js `v6.8.8.0` (commit `1b7a07d`), which builds FFmpeg 8.0 from
+ffmpeg.org, with emscripten 6.0.13 (`EMSDK_VERSION`) and `-O3 -msimd128`. About 10 minutes on four
+cores. SHA-256 of what is committed:
+
+    7c6a6a170b749501a6aaf67bb0cef44f2fc7f3e9dca667001dc8a5a50a872746  libav-avbridge.mjs
+    bf10637e8a7c50a191e05684b0b7c75c18a6ae6163c6102f06891f497082b87a  libav-6.8.8.0-avbridge.wasm.mjs
+    7fe98925a3d3117ba4805e0c2d9ce8b93e71d790f84a41692c8bb02c77ca3464  libav-6.8.8.0-avbridge.wasm.wasm
+
+A rebuild need not match these bytes (emscripten output is not reproducible bit for bit); it must
+pass the browser tests.
 
 ## Compile flags
 
@@ -121,13 +138,15 @@ so Vite never pre-bundles it. The variant's `import.meta.url` resolves to
 libav.js is **LGPL-2.1**. If you ship a custom variant in a product, you
 must also distribute the corresponding source / build script. Keep
 `scripts/build-libav.sh` and the libav.js repo URL alongside any binaries
-you redistribute.
+you redistribute. `COPYING.LGPLv2.1` (FFmpeg's copy of the licence) sits beside
+the binaries, and the build copies it into `webcodecs/` too.
 
 ## Files in this directory after a successful build
 
 ```
 vendor/libav/
 ├── README.md                              ← this file
+├── COPYING.LGPLv2.1                        ← the LGPL-2.1 text
 ├── libav-avbridge.mjs                         ← entry point (loaded by avbridge)
 ├── libav-6.8.8.0-avbridge.wasm.mjs            ← WASM build factory
 ├── libav-6.8.8.0-avbridge.wasm.wasm           ← compiled binary

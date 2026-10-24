@@ -27,8 +27,9 @@ of FFmpeg for the browser.
   - `avbridge` — a custom build produced by `scripts/build-libav.sh`. The
     fragment list, compile flags, and the exact libav.js source commit used
     are documented in [`vendor/libav/README.md`](./vendor/libav/README.md).
-    The build script is reproducible: running `./scripts/build-libav.sh`
-    downloads the exact upstream sources and reproduces the binary.
+    Running `./scripts/build-libav.sh` downloads the pinned upstream sources
+    and rebuilds it, matching in source and configuration though not byte
+    for byte.
 
 **LGPL replaceability.** avbridge's libav loader (`libavBaseUrl()` in
 `src/strategies/fallback/libav-loader.ts`) resolves the libav load path at

@@ -14,6 +14,9 @@ single source.
 | `bbb-h264-aac.ts` | MPEG-TS | H.264 (copy, Annex B) | AAC (copy) | **remux** strategy with non-zero starting PTS |
 | `bbb-h264-mp3.avi` | AVI | H.264 (copy) | MP3 stereo | **hybrid** strategy (libav demux + WebCodecs decode) |
 | `bbb-mpeg4-mp3.avi` | AVI | MPEG-4 Part 2 (DivX 5) | MP3 stereo | **fallback** strategy (WASM software decode) |
+| `xvid-green-wide.avi` | AVI | Xvid 320×240, pixel aspect 4:3 | MP3 | BT.601 colour (pure green) and the pixel aspect ratio (16:9 on screen) |
+| `mjpeg-pcm.avi` | AVI | Motion JPEG, full-range yuvj422p | PCM u8 mono 11 kHz | a camera's AVI (`MVI_*.AVI`) |
+| `mjpeg-grey16.avi` | AVI | Motion JPEG, full-range grey 16 | – | full range kept: read as limited it paints black |
 | `failures/bbb-truncated.mp4` | MP4 (corrupt) | – | – | error path — first 80% of bytes only, no `moov` |
 
 ## Regenerating
@@ -82,3 +85,17 @@ Big Buck Bunny is licensed under [CC-BY 3.0](https://creativecommons.org/license
 by the Blender Foundation. The original is available at <https://peach.blender.org/>.
 The 30-second 480p clip in this directory is a trimmed excerpt used solely
 for automated testing.
+
+`xvid-green-wide.avi` is not derived from Big Buck Bunny: it is a short, plain Xvid file with
+sound, made by hand:
+
+```bash
+ffmpeg -f lavfi -i "color=c=0x00ff00:size=320x240:rate=10" -f lavfi -i "sine=frequency=440:sample_rate=22050" -t 2 -c:v libxvid -q:v 2 -vtag XVID -aspect 16:9 -pix_fmt yuv420p -c:a libmp3lame -ac 1 -b:a 32k xvid-green-wide.avi
+```
+
+The Motion JPEG fixtures, a camera's AVI and a full-range grey 16, are made the same way:
+
+```bash
+ffmpeg -f lavfi -i "testsrc2=size=320x240:rate=15" -f lavfi -i "sine=frequency=440:sample_rate=11025" -t 1 -c:v mjpeg -q:v 25 -pix_fmt yuvj422p -c:a pcm_u8 -ac 1 mjpeg-pcm.avi
+ffmpeg -f lavfi -i "color=c=0x101010:size=64x48:rate=10" -t 2 -c:v mjpeg -q:v 2 -pix_fmt yuvj422p mjpeg-grey16.avi
+```
