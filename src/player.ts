@@ -268,6 +268,8 @@ export class UnifiedPlayer {
    * fallback chain. Throws only if all strategies are exhausted.
    */
   private async startSession(strategy: StrategyName, reason: string): Promise<void> {
+    // An aborted bootstrap stops here rather than starting each strategy in the chain in turn.
+    this.transport?.requestInit?.signal?.throwIfAborted();
     const plugin = this.registry.findFor(this.mediaContext!, strategy);
     if (!plugin) {
       throw new Error(`no plugin available for strategy "${strategy}"`);

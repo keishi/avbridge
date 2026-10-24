@@ -52,7 +52,7 @@ export async function probe(
       if (hasUnknownCodec) {
         try {
           const { probeWithLibav } = await import("./avi.js");
-          return await probeWithLibav(normalized, sniffed);
+          return await probeWithLibav(normalized, sniffed, transport);
         } catch {
           // libav also failed — return mediabunny's result (unknown codecs
           // are better than no result at all)
@@ -73,7 +73,7 @@ export async function probe(
       );
       try {
         const { probeWithLibav } = await import("./avi.js");
-        return await probeWithLibav(normalized, sniffed);
+        return await probeWithLibav(normalized, sniffed, transport);
       } catch (libavErr) {
         const mbMsg = (mediabunnyErr as Error).message || String(mediabunnyErr);
         const lvMsg = libavErr instanceof Error ? libavErr.message : String(libavErr);
@@ -89,7 +89,7 @@ export async function probe(
   // sniffed === avi | asf | flv | unknown — try libav.
   try {
     const { probeWithLibav } = await import("./avi.js");
-    return await probeWithLibav(normalized, sniffed);
+    return await probeWithLibav(normalized, sniffed, transport);
   } catch (err) {
     const inner = err instanceof Error ? err.message : String(err);
     // eslint-disable-next-line no-console

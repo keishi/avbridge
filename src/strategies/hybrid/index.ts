@@ -26,7 +26,7 @@ export async function createHybridSession(
   // Normalize the source so URL inputs go through the libav HTTP block
   // reader instead of being buffered into memory.
   const { normalizeSource } = await import("../../util/source.js");
-  const source = await normalizeSource(ctx.source);
+  const source = await normalizeSource(ctx.source, transport);
 
   const fps = ctx.videoTracks[0]?.fps ?? 30;
   const audio = new AudioOutput();

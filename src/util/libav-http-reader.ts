@@ -205,6 +205,16 @@ export async function attachLibavHttpReader(
   // ── State ───────────────────────────────────────────────────────────────
 
   let detached = false;
+  // Ends the fetch in flight on detach. A response that never arrives (a phone's network) used to
+  // keep detach(), and the teardown awaiting it, from ever settling.
+  // The caller's signal aborts it too, through a listener: AbortSignal.any is missing before
+  // Safari 17.4.
+  const aborter = new AbortController();
+  const signal = aborter.signal;
+  const outer = options.requestInit?.signal;
+  const abortFromOuter = () => aborter.abort(outer?.reason);
+  if (outer?.aborted) abortFromOuter();
+  else outer?.addEventListener("abort", abortFromOuter, { once: true });
   // LRU cache of fetched blocks, keyed by start position. Map insertion
   // order = recency. Bounded by `cacheBudget` bytes; evicts oldest-first
   // on overflow. Set budget to 0 to disable caching.
@@ -262,6 +272,7 @@ export async function attachLibavHttpReader(
     const end = Math.min(pos + length - 1, size - 1);
     const res = await fetchFn(url, {
       ...options.requestInit,
+      signal,
       headers: {
         ...(options.requestInit?.headers ?? {}),
         Range: `bytes=${pos}-${end}`,
@@ -344,6 +355,8 @@ export async function attachLibavHttpReader(
       // Restore the previous callback (if any) so we don't break unrelated
       // readers on the same libav instance.
       libav.onblockread = previousCallback;
+      outer?.removeEventListener("abort", abortFromOuter);
+      aborter.abort();
       // Wait for the last in-flight read to settle so we don't tear down
       // the virtual file while libav is still expecting a response.
       if (inflight) {

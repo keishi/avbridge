@@ -51,7 +51,7 @@ const vendorLibav = resolve(repoRoot, "vendor/libav");
 // Whitelist of filename patterns we actually ship. Everything else in the
 // upstream variant's dist/ (asm.js fallbacks for browsers that don't
 // support WASM, threaded `.thr.*` variants we don't use because libav.js
-// pthreads are unreliable — see libav-loader.ts) is excluded to keep the
+// pthreads are unreliable — see wantsThreads() in libav-loader.ts) is excluded to keep the
 // tarball under ~5 MB packed.
 const SHIPPED_FILENAME_PATTERNS = [
   /^libav-[a-z]+\.mjs$/,                          // entry ESM (libav-<variant>.mjs)

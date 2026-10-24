@@ -272,6 +272,16 @@ export class AvbridgeVideoElement extends HTMLElementCtor {
 
   disconnectedCallback(): void {
     if (this._destroyed) return;
+    this._releaseDocumentHooks();
+    // _teardown() bumps the bootstrap id synchronously, before its first await.
+    void this._track(this._teardown());
+  }
+
+  /**
+   * Undoes what connecting set up on the document. Shared by disconnect and destroy(), because
+   * disconnect does nothing once destroyed: a destroy() then remove() leaked the listener.
+   */
+  private _releaseDocumentHooks(): void {
     if (this._trackObserver) {
       this._trackObserver.disconnect();
       this._trackObserver = null;
@@ -283,12 +293,6 @@ export class AvbridgeVideoElement extends HTMLElementCtor {
     // If we were fullscreen via some ancestor and got disconnected, release
     // any orientation lock we had taken.
     this._releaseOrientationLock();
-    // Bump the bootstrap token so any in-flight async work is invalidated
-    // before we tear down. _teardown() also bumps but we want the bump to
-    // happen synchronously here so any awaited promise that resolves
-    // between `disconnect` and `_teardown` sees the new ID.
-    this._bootstrapId++;
-    void this._teardown();
   }
 
   attributeChangedCallback(name: string, _oldValue: string | null, newValue: string | null): void {
@@ -404,8 +408,7 @@ export class AvbridgeVideoElement extends HTMLElementCtor {
     const source = this._activeSource();
     if (source == null) {
       // Null transition: tear down and stay idle.
-      this._bootstrapId++;
-      void this._teardown();
+      void this._track(this._teardown());
       return;
     }
     // Only bootstrap if we're connected to the DOM.
@@ -416,7 +419,29 @@ export class AvbridgeVideoElement extends HTMLElementCtor {
 
   // ── Bootstrap (the only place a UnifiedPlayer is created) ──────────────
 
-  private async _bootstrap(source: MediaInput): Promise<void> {
+  /**
+   * Settles when every bootstrap and teardown started has finished, a player a bootstrap made
+   * after destroy included. destroy() waits for it.
+   */
+  private _settling: Promise<void> = Promise.resolve();
+  /**
+   * Aborts every request of the current bootstrap and of the player it makes: the sniff, the
+   * probe's reads and the decoder's. Teardown fires it, so a bootstrap stalled on the network
+   * (a Range read that never answers) fails out instead of keeping destroy() waiting.
+   */
+  private _bootAbort: AbortController | null = null;
+
+  private _bootstrap(source: MediaInput): Promise<void> {
+    return this._track(this._runBootstrap(source));
+  }
+
+  private _track(work: Promise<void>): Promise<void> {
+    const noop = () => undefined;
+    this._settling = this._settling.then(() => work).then(noop, noop);
+    return work;
+  }
+
+  private async _runBootstrap(source: MediaInput): Promise<void> {
     if (this._destroyed) return;
     const id = ++this._bootstrapId;
 
@@ -427,12 +452,18 @@ export class AvbridgeVideoElement extends HTMLElementCtor {
     if (id !== this._bootstrapId || this._destroyed) return;
 
     this._dispatch("loadstart", {});
+    // A loadstart listener may have set another source, whose bootstrap now owns the element.
+    if (id !== this._bootstrapId || this._destroyed) return;
+
+    const abort = new AbortController();
+    this._bootAbort = abort;
 
     let player: UnifiedPlayer;
     try {
       player = await createPlayer({
         source,
         target: this._videoEl,
+        requestInit: { signal: abort.signal },
         // Honor the consumer's preferred initial strategy. "auto" means
         // "let the classifier decide" — the createPlayer call simply doesn't
         // pass initialStrategy in that case.
@@ -538,6 +569,9 @@ export class AvbridgeVideoElement extends HTMLElementCtor {
       // _bootstrap() call passes its own ID and we skip the bump.
       this._bootstrapId++;
     }
+    // Ends the requests of a bootstrap still in flight and of the player leaving.
+    this._bootAbort?.abort();
+    this._bootAbort = null;
     const player = this._player;
     this._player = null;
     this._strategy = null;
@@ -1007,12 +1041,16 @@ export class AvbridgeVideoElement extends HTMLElementCtor {
 
   /**
    * Tear down the element permanently. After destroy(), the element ignores
-   * all method calls and attribute changes.
+   * all method calls and attribute changes. Resolves once nothing of this
+   * element still runs: the player, and a bootstrap in flight with any
+   * player it made.
    */
   async destroy(): Promise<void> {
     if (this._destroyed) return;
+    this._releaseDocumentHooks();
     this._destroyed = true;
-    await this._teardown();
+    await this._track(this._teardown());
+    await this._settling;
     this._dispatch("destroy", {});
   }
 
