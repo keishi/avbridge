@@ -44,6 +44,7 @@ export function isLibavTranscodeContainer(container: string): boolean {
     container === "avi" ||
     container === "asf" ||
     container === "flv" ||
+    container === "mpegps" ||
     container === "rm"  // RealMedia (.rm / .rmvb) — rv40/cook via libav software decode
   );
 }

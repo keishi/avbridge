@@ -75,11 +75,45 @@ describe("probe routing", () => {
 
   it("routes mpegts to mediabunny (not directly to libav)", async () => {
     mockSniff.mockResolvedValue("mpegts");
-    mockMediabunny.mockResolvedValue(fakeContext({ container: "mpegts" }));
+    mockMediabunny.mockResolvedValue(fakeContext({
+      container: "mpegts",
+      videoTracks: [{ id: 0, codec: "h264" } as MediaContext["videoTracks"][number]],
+    }));
 
     const result = await probe(new Blob([]));
     expect(result.container).toBe("mpegts");
     expect(mockMediabunny).toHaveBeenCalledOnce();
+    expect(mockLibav).not.toHaveBeenCalled();
+  });
+
+  it("escalates mpegts to libav when mediabunny dropped the video track", async () => {
+    // mediabunny ignores MPEG-2 video in TS (stream_type 0x02) and returns
+    // an audio-only context.
+    mockSniff.mockResolvedValue("mpegts");
+    mockMediabunny.mockResolvedValue(fakeContext({
+      container: "mpegts",
+      audioTracks: [{ id: 1, codec: "ac3" } as MediaContext["audioTracks"][number]],
+    }));
+    const libavCtx = fakeContext({
+      container: "mpegts",
+      probedBy: "libav",
+      videoTracks: [{ id: 0, codec: "mpeg2" } as MediaContext["videoTracks"][number]],
+    });
+    mockLibav.mockResolvedValue(libavCtx);
+
+    const result = await probe(new Blob([]));
+    expect(result).toBe(libavCtx);
+    expect(mockLibav).toHaveBeenCalledOnce();
+  });
+
+  it("keeps mediabunny's mpegts result if the libav escalation fails", async () => {
+    mockSniff.mockResolvedValue("mpegts");
+    const mbCtx = fakeContext({ container: "mpegts" });
+    mockMediabunny.mockResolvedValue(mbCtx);
+    mockLibav.mockRejectedValue(new Error("no mpegts demuxer"));
+
+    const result = await probe(new Blob([]));
+    expect(result).toBe(mbCtx);
   });
 
   it("routes AVI directly to libav (skips mediabunny)", async () => {

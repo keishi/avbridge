@@ -18,6 +18,7 @@
  */
 
 import { createPlayer, type UnifiedPlayer } from "../player.js";
+import { WakeLockManager } from "../util/wake-lock.js";
 import type {
   MediaInput,
   StrategyName,
@@ -203,6 +204,12 @@ export class AvbridgeVideoElement extends HTMLElementCtor {
   /** True if we successfully called screen.orientation.lock() on the last
    *  fullscreen entry. Used to know whether to unlock on exit. */
   private _orientationLocked = false;
+
+  /** Holds a screen wake lock while playing so the device doesn't sleep —
+   *  critical for canvas-rendered hybrid/fallback paths where the inner
+   *  <video> never plays and the OS sees no active media. Released on
+   *  pause/ended/teardown. Opt out with the `nowakelock` attribute. */
+  private readonly _wakeLock = new WakeLockManager();
 
   // ── Construction & lifecycle ───────────────────────────────────────────
 
@@ -505,6 +512,7 @@ export class AvbridgeVideoElement extends HTMLElementCtor {
     });
 
     player.on("ended", () => {
+      this._wakeLock.release();
       this._dispatch("ended", {});
     });
 
@@ -519,8 +527,10 @@ export class AvbridgeVideoElement extends HTMLElementCtor {
       // Honor any pending play() that was queued before bootstrap finished.
       if (this._pendingPlay) {
         this._pendingPlay = false;
+        this._requestWakeLock();
         void player.play().catch(() => { /* ignore — autoplay may be blocked */ });
       } else if (this.autoplay) {
+        this._requestWakeLock();
         void player.play().catch(() => { /* ignore */ });
       }
     });
@@ -538,6 +548,7 @@ export class AvbridgeVideoElement extends HTMLElementCtor {
       // _bootstrap() call passes its own ID and we skip the bump.
       this._bootstrapId++;
     }
+    this._wakeLock.release();
     const player = this._player;
     this._player = null;
     this._strategy = null;
@@ -992,6 +1003,7 @@ export class AvbridgeVideoElement extends HTMLElementCtor {
    */
   async play(): Promise<void> {
     if (this._destroyed) return;
+    this._requestWakeLock();
     if (this._player) {
       await this._player.play();
     } else {
@@ -1002,7 +1014,14 @@ export class AvbridgeVideoElement extends HTMLElementCtor {
   pause(): void {
     if (this._destroyed) return;
     this._pendingPlay = false;
+    this._wakeLock.release();
     this._player?.pause();
+  }
+
+  /** Acquire the screen wake lock unless the consumer opted out. */
+  private _requestWakeLock(): void {
+    if (this.hasAttribute("nowakelock")) return;
+    this._wakeLock.request();
   }
 
   /**
@@ -1013,6 +1032,7 @@ export class AvbridgeVideoElement extends HTMLElementCtor {
     if (this._destroyed) return;
     this._destroyed = true;
     await this._teardown();
+    this._wakeLock.dispose();
     this._dispatch("destroy", {});
   }
 

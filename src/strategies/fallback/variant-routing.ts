@@ -17,7 +17,7 @@ import type { LibavVariant } from "./libav-loader.js";
  * custom build can handle. Otherwise pick "webcodecs".
  */
 
-const LEGACY_CONTAINERS = new Set(["avi", "asf", "flv"]);
+const LEGACY_CONTAINERS = new Set(["avi", "asf", "flv", "mpegps"]);
 
 /** Codecs the webcodecs variant can handle (native browser codecs only).
  * Anything not in these sets needs the custom avbridge variant. */

@@ -4,6 +4,33 @@ All notable changes to **avbridge.js** are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.14.0]
+
+MPEG program stream (`.mpg` / `.vob` / VCD) support, plus a screen wake
+lock and libav loader hardening.
+
+### Added
+
+- **MPEG-PS container** (`"mpegps"` in `ContainerKind`). Sniffed from the
+  `00 00 01 BA` pack header and probed via libav; MPEG-1/2 video plays
+  through the fallback strategy. Requires the rebuilt `avbridge` libav
+  variant, which now includes `demuxer-mpegps`, `demuxer-mpegts`,
+  `demuxer-mpegvideo`, the MP2 decoder and `parser-ac3`, plus FLV/H.263/
+  VP6F/rawvideo video and PCM-DVD/Nellymoser/ADPCM-SWF audio decoders.
+- **`"mp2"` audio codec** (MPEG-1 Layer II), routed to the fallback strategy.
+- **Screen wake lock** while `<avbridge-video>` is playing, so canvas-rendered
+  hybrid/fallback playback doesn't let the device sleep. Opt out with the
+  `nowakelock` attribute.
+
+### Fixed
+
+- **MPEG-TS with MPEG-2 video** — mediabunny silently drops unmapped TS
+  streams; a TS probe that yields no video track now escalates to libav.
+- **libav loader reachability check** uses `cache: "no-store"` so a corrupt
+  partial (206) copy of the module can't poison the HTTP cache.
+- The libav probe error now names the container whose demuxer is missing
+  instead of always saying "e.g. AVI".
+
 ## [2.13.0]
 
 Post-seek fast-forward fix on the fallback path, plus seekbar UX

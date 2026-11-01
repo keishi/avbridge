@@ -83,6 +83,10 @@ describe("sniffContainerFromBytes", () => {
     expect(sniffContainerFromBytes(bytes(0x66, 0x4c, 0x61, 0x43))).toBe("flac");
   });
 
+  it("detects MPEG program stream", () => {
+    expect(sniffContainerFromBytes(bytes(0x00, 0x00, 0x01, 0xba, 0x44))).toBe("mpegps");
+  });
+
   it("detects MP3 from ID3v2 tag", () => {
     expect(sniffContainerFromBytes(bytes(0x49, 0x44, 0x33))).toBe("mp3");
   });

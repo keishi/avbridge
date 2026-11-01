@@ -30,6 +30,7 @@ export type ContainerKind =
   | "flac"
   | "adts"
   | "mpegts"
+  | "mpegps" // MPEG program stream (.mpg / .vob / VCD)
   | "unknown";
 
 /** Video codec families. Strings, not enums, so plugins can extend. */
@@ -61,6 +62,7 @@ export type VideoCodec =
 export type AudioCodec =
   | "aac"
   | "mp3"
+  | "mp2" // MPEG-1 Layer II (common in MPEG-PS / VCD / DVD)
   | "opus"
   | "vorbis"
   | "flac"

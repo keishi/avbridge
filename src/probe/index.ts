@@ -49,7 +49,11 @@ export async function probe(
       const hasUnknownCodec =
         result.videoTracks.some((t) => t.codec === "unknown") ||
         result.audioTracks.some((t) => t.codec === "unknown");
-      if (hasUnknownCodec) {
+      // mediabunny silently drops MPEG-TS streams it can't map (e.g.
+      // MPEG-2 video, stream_type 0x02 — common in .m2ts/.ts captures),
+      // so a TS with no video track is suspect: ask libav, which sees them.
+      const tsMissingVideo = sniffed === "mpegts" && result.videoTracks.length === 0;
+      if (hasUnknownCodec || tsMissingVideo) {
         try {
           const { probeWithLibav } = await import("./avi.js");
           return await probeWithLibav(normalized, sniffed);
@@ -103,7 +107,7 @@ export async function probe(
     }
     throw new AvbridgeError(
       ERR_LIBAV_NOT_REACHABLE,
-      `${sniffed.toUpperCase()} files require libav.js, which failed to load: ${inner || "(no details)"}`,
+      `${sniffed.toUpperCase()} files require libav.js, which failed to load or demux the file: ${inner || "(no details)"}`,
       "Install @libav.js/variant-webcodecs, or check that AVBRIDGE_LIBAV_BASE points to the correct path.",
     );
   }

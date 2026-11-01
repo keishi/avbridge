@@ -109,9 +109,20 @@ async function loadVariantInner(
   // dynamic import or inside libav's own WASM instantiation. Surfaces the
   // most common mistake ("libav base path is wrong") in <100 ms instead of
   // an indeterminate stall.
+  //
+  // `cache: "no-store"` is load-bearing: this request shares an HTTP cache
+  // entry with the `import()` below. A misbehaving server (e.g. gzip
+  // middleware compressing the 206 body) can otherwise leave a corrupt
+  // partial copy of the module in the browser cache, and with long-lived
+  // immutable cache headers every later import() fails until the user
+  // clears site data.
   if (typeof fetch === "function") {
     try {
-      const head = await fetch(variantUrl, { method: "GET", headers: { Range: "bytes=0-0" } });
+      const head = await fetch(variantUrl, {
+        method: "GET",
+        headers: { Range: "bytes=0-0" },
+        cache: "no-store",
+      });
       if (!head.ok && head.status !== 206) {
         throw new Error(
           `HTTP ${head.status} ${head.statusText} — check that libav files are served ` +

@@ -78,6 +78,9 @@ read -r -d '' VARIANT_FRAGMENTS <<'EOF' || true
   "demuxer-wav",
   "demuxer-aac",
   "demuxer-rm",
+  "demuxer-mpegps",
+  "demuxer-mpegts",
+  "demuxer-mpegvideo",
 
   "parser-h264",
   "parser-hevc",
@@ -103,9 +106,17 @@ read -r -d '' VARIANT_FRAGMENTS <<'EOF' || true
   "decoder-rv20",
   "decoder-rv30",
   "decoder-rv40",
+  "decoder-flv",
+  "decoder-h263",
+  "decoder-vp6f",
+  "decoder-rawvideo",
 
   "decoder-aac",
   "decoder-mp3",
+  "decoder-mp2",
+  "decoder-pcm_dvd",
+  "decoder-nellymoser",
+  "decoder-adpcm_swf",
   "decoder-ac3",
   "decoder-eac3",
   "decoder-wmav1",
@@ -122,6 +133,7 @@ read -r -d '' VARIANT_FRAGMENTS <<'EOF' || true
   "decoder-theora",
 
   "parser-dca",
+  "parser-ac3",
 
   "bsf-mpeg4_unpack_bframes"
 ]

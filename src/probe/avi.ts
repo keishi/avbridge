@@ -58,7 +58,7 @@ export async function probeWithLibav(
     // eslint-disable-next-line no-console
     console.error("[avbridge] ff_init_demuxer_file raw error:", err);
     throw new Error(
-      `libav.js could not demux ${filename}. The current libav variant likely lacks the required demuxer (e.g. AVI). See vendor/libav/README.md for build instructions. (${inner || "no message — see console for raw error"})`,
+      `libav.js could not demux ${filename}. The current libav variant likely lacks the demuxer for ${sniffed === "unknown" ? "this format" : sniffed.toUpperCase()}; rebuild it with scripts/build-libav.sh (see vendor/libav/README.md). (${inner || "no message — see console for raw error"})`,
     );
   }
 
@@ -225,6 +225,7 @@ function ffmpegToAvbridgeAudio(name: string): AudioCodec {
     case "opus":   return "opus";
     case "vorbis": return "vorbis";
     case "flac":   return "flac";
+    case "mp2":    return "mp2";
     case "ac3":    return "ac3";
     case "eac3":   return "eac3";
     case "wmav1":

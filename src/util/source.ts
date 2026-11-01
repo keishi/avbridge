@@ -207,6 +207,11 @@ export function sniffContainerFromBytes(head: Uint8Array): ContainerKind {
   if (head.length >= 380 && head[4] === 0x47 && head[192] === 0x47) {
     return "mpegts"; // M2TS — 4-byte timestamp prefix per packet
   }
+  // MPEG program stream: pack start code 00 00 01 BA (MPEG-1 and MPEG-2 PS,
+  // .mpg / .vob / VCD). Not mediabunny-readable — probe goes straight to libav.
+  if (head[0] === 0x00 && head[1] === 0x00 && head[2] === 0x01 && head[3] === 0xba) {
+    return "mpegps";
+  }
   // RIFF....AVI  →  AVI
   if (
     head[0] === 0x52 && head[1] === 0x49 && head[2] === 0x46 && head[3] === 0x46 &&
